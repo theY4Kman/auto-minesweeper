@@ -1,641 +1,381 @@
-# MineSweeper game by Suzan Shakya:suzan.shakya@gmail.com
+import os
+import sys
+from random import SystemRandom
 
-import pyjd
+# This sets up a Context for us; it MUST be an asterisk import
+from plotdevice import *
 
-from pyjamas.ui.RootPanel import RootPanel
-from pyjamas.ui.FocusPanel import FocusPanel
-from pyjamas.ui.VerticalPanel import VerticalPanel
-from pyjamas.ui.HorizontalPanel import HorizontalPanel
-from pyjamas.ui.SimplePanel import SimplePanel
-from pyjamas.ui.MenuBar import MenuBar
-from pyjamas.ui.MenuItem import MenuItem
-from pyjamas.ui.Grid import Grid
-from pyjamas.ui.DialogBox import DialogBox
-from pyjamas.ui.PopupPanel import PopupPanel
-from pyjamas.ui.TextBox import TextBox
-from pyjamas.ui.Button import Button
-from pyjamas.ui.Label import Label
-from pyjamas.ui.HTMLPanel import HTMLPanel
-from pyjamas.ui import Event
-from pyjamas import Window
-from pyjamas import DOM
-from pyjamas.Timer import Timer
-from __pyjamas__ import doc
-from pyjamas.JSONService import JSONProxy
+from plotdevice.context import Context, Canvas
+from plotdevice.gfx.image import Image
+from plotdevice.gfx.typography import CENTER
+from plotdevice.util import grid
 
-import random
+random = SystemRandom()
 
-class DataService(JSONProxy):
+
+ROOT_DIR = os.path.dirname(sys.argv[0])
+IMAGE_DIR = os.path.join(ROOT_DIR, 'images')
+try:
+    os.makedirs(IMAGE_DIR)
+except OSError:
+    pass
+
+
+FPS = 60
+
+# Board size in cells
+BOARD_SIZE = 32, 16
+BOARD_WIDTH, BOARD_HEIGHT = BOARD_SIZE
+
+# Number of mines
+MINES = 99
+
+# Width/height of each cell
+CELL_PX = 16
+
+# Bezel border width
+BORDER_PX = 3
+BORDER_PX_0 = BORDER_PX - 1
+
+# Board margin
+MARGIN_PX = 10
+
+NUMBER_COLORS = {
+    1: 'blue',
+    2: 'green',
+    3: 'red',
+    4: 'darkblue',
+    5: 'brown',
+    6: 'cyan',
+    7: 'black',
+    8: 'gray',
+}
+
+
+class Templates(object):
+    """Responsible for drawing initial pictures of each possible cell state"""
+
     def __init__(self):
-        super(DataService, self).__init__("/minesweeper/default/call/jsonrpc", \
-                                          ["add_score", "get_scores"])
+        """
+        :type ctx: plotdevice.context.Context
+        """
+        self.ctx = Context(Canvas(CELL_PX, CELL_PX))
+        self.ctx.clear()
 
-def setColorfulHTML(element, count):
-    colors = ['#0000fe', '#007a00', '#fe0000', '#00007a',
-              '#7a0000', '#007a7a', '#000000', '#7a7a7a']
-    html = '<span class="number" style="color:%s;">%d</span>' % \
-                                                        (colors[count-1], count)
-    DOM.setInnerHTML(element, html)
+        self._template_fns = {
+            'mine': self._draw_mine,
+            'mine_losing': lambda ctx: self._draw_mine(ctx, losing=True),
+            'mine_unrevealed': self._draw_mine_unrevealed,
+            'unrevealed': self._draw_unrevealed,
+            'empty': lambda ctx: None,
+        }
+        self._templates = {}
 
-def ADD(parent, *widgets):
-    for widget in widgets:
-        parent.add(widget)
+        def build_number_fn(i):
+            # Embed constant in closure scope
+            return lambda ctx: self._draw_number(ctx, i)
+        for i in xrange(1, 9):
+            self._template_fns['number%d' % i] = build_number_fn(i)
 
-class MineMenuBar(MenuBar):
-    def __init__(self, game):
+        self._render_templates()
+
+    def __getitem__(self, item):
+        return self._templates[item]
+
+    def _render_templates(self):
+        for name, fn in self._template_fns.iteritems():
+            tmpl = self._render_template(name, fn)
+            self._templates[name] = tmpl
+            setattr(self, name, tmpl)
+
+    def _render_template(self, name, fn):
+        filename = os.path.join(IMAGE_DIR, name + '.png')
+        if not os.path.exists(filename):
+            self.ctx.clear()
+            with self.ctx.export(filename):
+                # Default background colour
+                with self.ctx.fill('lightgray'):
+                    self.ctx.rect(0, 0, CELL_PX, CELL_PX)
+                fn(self.ctx)
+            self.ctx.clear()
+
+        return Image(filename)
+
+    def _draw_number(self, ctx, number):
+        """
+        :type ctx: plotdevice.context.Context
+        """
+        with ctx.fill(NUMBER_COLORS[number]):
+            ctx.align(CENTER)
+            t = ctx.text(str(number), x=0, y=CELL_PX, width=CELL_PX,
+                         size=11, weight='bold', plot=False)
+            w,h = ctx.measure(t)
+            t.y = CELL_PX - (float(CELL_PX) - h / 2) / 2
+            ctx.plot(t)
+
+    def _draw_mine(self, ctx, losing=False):
+        color = 'red' if losing else 'black'
+        with ctx.translate(CELL_PX / 2 / 2, CELL_PX / 2 / 2), \
+             ctx.fill(color):
+            ctx.oval(0, 0, CELL_PX / 2, CELL_PX / 2)
+
+    def _draw_mine_unrevealed(self, ctx):
+        """A mine which hasn't been revealed, but the game is over"""
+        self._draw_unrevealed(ctx)
+        self._draw_mine(ctx)
+
+    def _draw_unrevealed(self, ctx):
+        """The signature bezel!"""
+        # Start with a light, light grey background
+        with ctx.fill('#eee'):
+            ctx.rect(0, 0, CELL_PX, CELL_PX)
+
+        with ctx.nostroke():
+            # Left, top border
+            with ctx.fill('black', 0.1), ctx.bezier():
+                ctx.moveto(0, 0)
+                ctx.lineto(CELL_PX, 0)
+                ctx.lineto(CELL_PX - BORDER_PX_0, BORDER_PX_0)
+                ctx.lineto(BORDER_PX_0, BORDER_PX_0)
+                ctx.lineto(BORDER_PX_0, CELL_PX - BORDER_PX_0)
+                ctx.lineto(0, CELL_PX, close=True)
+
+            # Right, bottom border
+            with ctx.fill('black', 0.3), ctx.bezier():
+                ctx.moveto(CELL_PX, CELL_PX)
+                ctx.lineto(CELL_PX, 0)
+                ctx.lineto(CELL_PX - BORDER_PX_0, BORDER_PX_0)
+                ctx.lineto(CELL_PX - BORDER_PX_0, CELL_PX - BORDER_PX_0)
+                ctx.lineto(BORDER_PX_0, CELL_PX - BORDER_PX_0)
+                ctx.lineto(0, CELL_PX)
+                ctx.lineto(CELL_PX, CELL_PX, close=True)
+
+
+def redraw_prop(attr):
+    @property
+    def prop(self):
+        return getattr(self, attr)
+
+    @prop.setter
+    def prop(self, value):
+        setattr(self, attr, value)
+        self.should_redraw = True
+
+    return prop
+
+
+class Cell(object):
+    def __init__(self, game, x, y,
+                 is_mine=False, is_flagged=False, is_revealed=False):
         self.game = game
-        super(MineMenuBar, self).__init__()
-        
-        body = doc().getElementsByTagName('body').item(0)
-        body.setAttribute('id', 'Beginner')
-        
-        menu_game = MenuBar(True)
-        menu_game.addItem('New', MenuCmd(self, 'New'))
-        menu_game.addItem(self.span_text('Beginner'), True, \
-                                                MenuCmd(self, 'Beginner'))
-        menu_game.addItem(self.span_text('Intermediate'), True, \
-                                                MenuCmd(self, 'Intermediate'))
-        menu_game.addItem(self.span_text('Expert'), True, \
-                                                MenuCmd(self, 'Expert'))
-        menu_game.addItem(self.span_text('Custom'), True, \
-                                                MenuCmd(self, 'Custom'))
-        
-        menu_help = MenuBar(True)
-        #menu_help.addItem('Instructions', MenuCmd(self, 'Instructions'))
-        menu_help.addItem('About', MenuCmd(self, 'About'))
-        
-        self.addItem(MenuItem('Game', menu_game))
-        self.addItem(MenuItem('Help', menu_help))
-    
-    def span_text(self, text):
-        return '<span class="%s"></span>%s' % (text, text)
-
-class MenuCmd:
-    def __init__(self, menu, command):
-        self.menu = menu
-        self.command = command
-    
-    def execute(self):
-        if self.command == 'New':
-            self.menu.game.restart()
-        if self.command in ('Beginner', 'Intermediate', 'Expert', 'Custom'):
-            body = doc().getElementsByTagName('body').item(0)
-            body.setAttribute('id', self.command)
-        
-            levels = {'Beginner':     [1, ( 8,  8)],
-                      'Intermediate': [2, (16, 16)],
-                      'Expert':       [3, (16, 32)],
-                      'Custom':       [4]}
-            level_rc = levels[self.command]
-            self.menu.game.level = level_rc[0]
-            if level_rc[0] == 4:
-                self.show_custom()
-            else:
-                self.menu.game.next_game(*level_rc[1])
-        elif self.command == 'Instructions':
-            pass
-        elif self.command == 'About':
-            self.show_about()
-    
-    def show_custom(self):
-        self.dialog = DialogBox(StyleName='custom-dialog')
-        self.dialog.setHTML('Custom Settings')
-        
-        contents = VerticalPanel(StyleName='contents')
-        self.dialog.setWidget(contents)
-        
-        # contents of contents
-        rows = HorizontalPanel()
-        columns = HorizontalPanel()
-        bombs = HorizontalPanel()
-        buttons = HorizontalPanel()
-        
-        ADD(contents, rows, columns, bombs, buttons)
-        
-        self.row = TextBox()
-        ADD(rows, Label('Rows:'), self.row)
-        
-        self.column = TextBox()
-        ADD(columns, Label('Columns:'), self.column)
-        
-        self.bomb = TextBox()
-        ADD(bombs, Label('Bombs:'), self.bomb)
-        
-        ADD(buttons, Button("OK", getattr(self, 'new_game')), \
-                     Button("Cancel", getattr(self, 'close_dialog')))
-        
-        left = (Window.getClientWidth() - 201) / 2
-        top = (Window.getClientHeight() - 190) / 2
-        self.dialog.setPopupPosition(left, top)
-        
-        self.dialog.show()
-    
-    def new_game(self, sender):
-        try:
-            row = int(self.row.getText())
-            column = int(self.column.getText())
-            if not (2 <= row <= 50 and 2 <= column <= 50):
-                raise
-        except:
-            Window.alert('Valid numbers in row and column field are 2 - 50.')
-            return
-        bomb = self.bomb.getText()
-        if bomb:
-            try:
-                bomb = int(bomb)
-                if not (1 <= bomb <= row*column-2):
-                    raise
-            except:
-                Window.alert('Valid numbers in bomb field are 1 to row*column-2.')
-                return
-        else:
-            bomb = self.menu.game.calculate_no_of_bomb(row, column)
-        self.menu.game.next_game(row, column, bomb)
-        self.close_dialog(sender)
-    
-    def close_dialog(self, sender):
-        self.dialog.hide()
-    
-    def show_about(self):
-        self.dialog = PopupPanel(StyleName='about', autoHide=True)
-        
-        contents = HTMLPanel('', StyleName='contents')
-        self.dialog.setWidget(contents)
-        
-        html = '<p class="pyjamas">MineSweeper written in Python with ' \
-                    '<a href="http://pyjs.org" target="_blank">Pyjamas</a><p>' \
-               '<p class="comments">Send comments to ' \
-                    '<a href="mailto:suzan.shakya@gmail.com">' \
-                        'suzan.shakya@gmail.com</a>.<p>'
-        contents.setHTML(html)
-        
-        left = (Window.getClientWidth() - 294) / 2
-        top = (Window.getClientHeight() - 112) / 2
-        self.dialog.setPopupPosition(left, top)
-        self.dialog.show()
-
-class Smiley(FocusPanel):
-    def __init__(self, game):
-        self.game = game
-        super(Smiley, self).__init__(StyleName='facesmile')
-        
-        self.sinkEvents(Event.ONCONTEXTMENU)
-        self.addClickListener(self)
-        self.addMouseListener(self)
-        self.pressed = False
-    
-    def onClick(self, sender):
-        self.game.restart()
-    
-    def onMouseDown(self, sender, x, y):
-        self.pressed = True
-        self.previousStyleName = self.getStyleName()
-        self.setStyleName('faceooh')
-    
-    def onMouseUp(self, sender, x, y):
-        if self.pressed:
-            self.pressed = False
-            self.setStyleName(self.previousStyleName)
-    
-    def onMouseLeave(self, sender):
-        self.onMouseUp(sender, 0, 0)
-
-class RemoteHandler:
-    def __init__(self, game):
-        self.game = game
-        
-    def onRemoteResponse(self, response, request_info):
-        if request_info.method == 'get_scores':
-            self.game.toppers = response
-            self.load_top_scores()
-    
-    def load_top_scores(self):
-        html = "<p>These are the top MineSweepers.<p>"
-        html += "<table class='scores_table'>"
-        html += "<tr><th> %s </th><th> %s </th><th> %s </th></tr>" % \
-                ('Beginner', 'Intermediate', 'Expert')
-        html += "<tr>"
-        for score in self.game.toppers:
-            html += "<td><table class='individual_table'>"
-            html += "<tr><th class='name'> MineSweepers </th>" \
-                    "<th class='time'> Time </th></tr>"
-            for player, time in score:
-                html += "<tr><td class='name'> %s </td>" \
-                        "<td class='time'> %s </td></tr>" % (player, time)
-            html += "</table></td>"
-        html += "</tr></table>"
-        SCORES.setHTML(html)
-    
-    def onRemoteError(self, code, message, request_info):
-        LOG.setHTML(str(message))
-        Timer(5000, lambda sender: LOG.setHTML(''))
-
-class RemainingMineHandler:
-    """handler for counter, only active when counter is 000"""
-    def __init__(self, game):
-        self.game = game
-    
-    def onClick(self, sender):
-        self.game.counter.setStyleName('digit counter')
-        
-        bomb_explodes_on = [one for one in self.game.bombed_cells \
-                                                            if one.state != 1]
-        if bomb_explodes_on:
-            self.game.show_all_bombs(bomb_explodes_on)
-            # the above method will set game.started == False, so set it True
-            self.game.started = True
-        
-        for one in self.game.get_all_cells():
-            if not self.game.started:
-                break
-            elif one.state in (0, 2) and one.count != -1:
-                self.game.grid.onClick(one)
-        
-        self.game.started = False
-        if bomb_explodes_on:
-            self.game.face.setStyleName('facedead')
-
-class Cell(SimplePanel):
-    def __init__(self, x, y, grid):
-        super(Cell, self).__init__()
         self.x = x
         self.y = y
-        self.grid = grid
-        
-        self.count = 0  # count of surr bombs. -1 if it contains bomb
-        self.state = 0  # 0 = blank, 1 = flagged, 2 = qmarked, 3 = opened
-        
-        # mock self.element as if it were td associated with this cell.
-        # because we won't be creating div inside td.
-        self.element = grid.cellFormatter.getElement(x, y)
-        self.setStyleName('blank')
 
-class CustomGrid(Grid):
-    def __init__(self, game, row, column):
-        super(CustomGrid, self).__init__(row, column, StyleName='grid')
-        self.sinkEvents(Event.ONCONTEXTMENU)
-        self.sinkEvents(Event.ONMOUSEDOWN | Event.ONMOUSEUP | Event.ONMOUSEOUT)
-        self.game = game
+        self._is_mine = is_mine
+        self._is_flagged = is_flagged
+        self._is_revealed = is_revealed
 
-        self.cells = []
-        for i in xrange(row):
-            self.cells.append([])
-            for j in xrange(column):
-                self.cells[-1].append(Cell(i, j, self))
-    
-    def get_cell(self, row, column):
-        return self.cells[row][column]
-    
-    def onBrowserEvent(self, event):
-        DOM.eventPreventDefault(event)
-        if not self.game.started:
-            return
-        td = self.getEventTargetCell(event)
-        if not td:
-            return
-        tr = DOM.getParent(td)
-        table = DOM.getParent(tr)
-        row = DOM.getChildIndex(table, tr)
-        column = DOM.getChildIndex(tr, td)
-        target_cell = self.get_cell(row, column)
-        
-        type = DOM.eventGetType(event)
-        event_mapper = {'click': 'onClick',
-                        'contextmenu': 'onRightClick',
-                        'mousedown': 'onMouseDown',
-                        'mouseup': 'onMouseUp',
-                        'mouseout': 'onMouseLeave'}
-        event_handler = event_mapper.get(type)
-        if event_handler:
-            getattr(self, event_handler)(target_cell)
-    
-    def onClick(self, target):
-        if target.state == 1:
-            return
-        if target.state == 3 and target.count:
-            self.game.open_if_satisfies(target)
-            return
-        target.setStyleName('opened')
-        target.state = 3
-        self.game.count_opened_cells += 1
-        
-        if self.game.first_click:
-            self.game.first_click = False
-            self.game.onTimer(target)
-            if target.count == -1:
-                self.game.move_to_extra_mine(target)
-        
-        if target.count == -1:
-            self.game.show_all_bombs([target])
-            return
-        elif target.count == 0:
-            self.game.open_neighboring_cells(target)
-        else:
-            setColorfulHTML(target.getElement(), target.count)
-        
-        self.game.check_win()
-    
-    def onRightClick(self, target):
-        if target.state == 3:
-            return
-        if self.game.first_click:
-            self.game.first_click = False
-            self.game.onTimer(target)
-        if target.state == 0:
-            target.setStyleName('bombflagged')
-            target.state = 1
-            self.game.flagged_cells.append(target)
-        elif target.state == 1:
-            target.setStyleName('bombquestion')
-            target.state = 2
-            self.game.flagged_cells.remove(target)
-        elif target.state == 2:
-            target.setStyleName('blank')
-            target.state = 0
-        
-        self.game.set_counter()
-        self.game.check_win()
-    
-    def onMouseDown(self, target):
-        if target.state == 0:
-            target.addStyleName('pressed')
-            self.game.to_be_released = [target]
-        if target.state == 3 and target.count:
-            self.game.press_neighbor_cells(target)
-        self.game.face.setStyleName('faceooh')
-        self.game.no_of_click += 1
-    
-    def onMouseUp(self, target):
-        for one in self.game.to_be_released:
-            one.removeStyleName('pressed')
-        self.game.to_be_released = []
-        self.game.face.setStyleName('facesmile')
-    
-    def onMouseLeave(self, target):
-        self.onMouseUp(target)
+        # Whether this mine was clicked to lose the game
+        self._is_losing_mine = False
+        # Whether the game is over
+        self._is_game_over = False
 
-class Game(VerticalPanel):
-    def __init__(self, row, column=0):
-        super(Game, self).__init__(StyleName='game')
-        self.sinkEvents(Event.ONCONTEXTMENU)  # to disable right click
-        
-        self.row = row
-        self.column = column or row
-        self.level = 1
-        self.toppers = [[], [], []]  # storage for top scorers for 3 levels.
-        self.remote = DataService()
-        self.remote_handler = RemoteHandler(self)
-        self.remote.get_scores(self.remote_handler)
-        
-        # contents of Game
-        menubar = MineMenuBar(self)
-        score_board = HorizontalPanel(StyleName='score-board')
-        self.grid_panel = SimplePanel(StyleName='grid-panel')
-        
-        ADD(self, menubar, score_board, self.grid_panel)
-        
-        # contents of score_board
-        self.counter = Label('000', StyleName='digit counter')
-        self.face = Smiley(self)
-        self.timer = Label('000', StyleName='digit timer')
-        
-        ADD(score_board, self.counter, self.face, self.timer)
-        score_board.setCellWidth(self.face, '100%')
-        
-        self.create_grid()
-        self.start()
-    
-    def onBrowserEvent(self, event):
-        # prevent right click context menu as well as all the other events.
-        DOM.eventPreventDefault(event)
-    
-    def create_grid(self):
-        # contents of self.grid_panel
-        self.grid = CustomGrid(self, self.row, self.column)
-        ADD(self.grid_panel, self.grid)
-    
-    def start(self, no_of_bomb=None):
-        self.time = -1
-        self.started = True
-        self.first_click = True
-        
-        self.bombed_cells = []
-        self.flagged_cells = []
-        self.to_be_released = []  # cells to be released after being pressed
-        self.count_opened_cells = 0
-        self.no_of_click = 0
-        
-        if self.level in (1, 2, 3):
-            self.no_of_bomb = self.calculate_no_of_bomb(self.row, self.column)
-        elif no_of_bomb is not None:
-            self.no_of_bomb = no_of_bomb
-        self.squares = self.row * self.column
-        self.no_of_safe_zones = self.squares - self.no_of_bomb
-        
-        self.set_counter()
-        self.timer.setText('000')
-        
-        self.generate_bombs()
-        self.face.setStyleName('facesmile')
-    
-    def calculate_no_of_bomb(self, row, column):
-        return int((row * column * 10) / 64.) or 1
-    
-    def get_all_cells(self):
-        for i in xrange(self.row):
-            for j in xrange(self.column):
-                yield self.grid.get_cell(i, j)
-    
-    def get_neighbors(self, cell):
-        x = cell.x
-        y = cell.y
-        row, column = self.row, self.column
-        for i in xrange(x-1, x+2):
-            if 0 <= i < row:
-                for j in xrange(y-1, y+2):
-                    if 0 <= j < column:
-                        if (i,j) != (x, y):
-                            yield self.grid.get_cell(i, j)
-    
-    def set_counter(self):
-        next_value = self.no_of_bomb - len(self.flagged_cells)
-        
-        if next_value == 0 and self.started:
-            self.counter.setStyleName('digit counter-blue')
-            self.counter.addClickListener(RemainingMineHandler(self))
-        else:
-            self.counter.setStyleName('digit counter')
-            self.counter._clickListeners = []
-        
-        if next_value < 0:
-            template = '-00'
-            next_value = abs(next_value)
-        else:
-            template = '000'
-        value = str(next_value)
-        value = template[:-len(value)] + value
-        self.counter.setText(value)
-    
-    def onTimer(self, target):
-        if not self.started or self.first_click:
-            return
-        Timer(1000, self)
-        self.time += 1
-        if self.time <= 999:
-            str_time = str(self.time)
-            str_time = '000'[:-len(str_time)] + str_time
-            self.timer.setText(str_time)
-        else:
-            self.started = False
-            self.face.setStyleName('faceclock')
-    
-    def sample(self, population, k):
-        # pyjamas doesn't support random.sample but random.choice
-        seq = list(population)
-        s = []
-        for i in xrange(k):
-            pick = random.choice(seq)
-            seq.remove(pick)
-            s.append(pick)
-        return s
-    
-    def generate_bombs(self):
-        # generate 1 extra mine so that if user's first click is bomb, move that
-        bombs = self.sample(xrange(self.squares), self.no_of_bomb+1)
-        row, column = self.row, self.column
-        for i,bomb in enumerate(bombs):
-            x = bomb // column
-            y = bomb % column
-            mine = self.grid.get_cell(x, y)
-            if i == 0:
-                self.extra_mine = mine
-                continue
-            #DOM.setInnerHTML(mine.getElement(),'b');mine.addStyleName('debug')
-            self.bombed_cells.append(mine)
-            mine.count = -1
-            for one in self.get_neighbors(mine):
-                if one.count != -1:
-                    one.count += 1
-    
-    def move_to_extra_mine(self, to_be_moved):
-        to_be_moved.count = 0
-        self.bombed_cells.remove(to_be_moved)
-        for one in self.get_neighbors(to_be_moved):
-            if one.count == -1:
-                to_be_moved.count += 1
-            else:
-                one.count -= 1
-        
-        self.extra_mine.count = -1
-        self.bombed_cells.append(self.extra_mine)
-        for one in self.get_neighbors(self.extra_mine):
-            if one.count != -1:
-                one.count += 1
-    
-    def press_neighbor_cells(self, cell):
-        self.count_flags = 0
-        self.bomb_explodes_on = []
-        self.to_be_released = []
-        for one in self.get_neighbors(cell):
-            if one.state == 3:
-                continue
-            one.addStyleName('pressed')
-            self.to_be_released.append(one)
-            if one.state == 1:
-                self.count_flags += 1
-            else:
-                if one.count == -1:
-                    self.bomb_explodes_on.append(one)
-    
-    def open_if_satisfies(self, cell):
-        if self.count_flags == cell.count:
-            if self.bomb_explodes_on:
-                self.show_all_bombs(self.bomb_explodes_on)
-            else:
-                self.open_neighboring_cells(cell)
-    
-    def open_neighboring_cells(self, cell):
-        if not self.started:
-            return
-        for one in self.get_neighbors(cell):
-            if one.state in (0, 2) and one.count != -1:
-                one.setStyleName('opened')
-                one.state = 3
-                self.count_opened_cells += 1
-                if one.count == 0:
-                    self.open_neighboring_cells(one)
+        # Cached number for our cell
+        self.number = None
+
+        # Whether we need to do any drawing
+        self.should_redraw = True
+
+    is_mine = redraw_prop('_is_mine')
+    is_losing_mine = redraw_prop('_is_losing_mine')
+    is_flagged = redraw_prop('_is_flagged')
+    is_revealed = redraw_prop('_is_revealed')
+    is_game_over = redraw_prop('_is_game_over')
+
+    def neighbors(self):
+        return filter(None, map(lambda t: self._get_neighbour(*t), [
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+            (0, 1),
+            (-1, 1),
+            (-1, 0),
+        ]))
+
+    def neighbor_mines(self):
+        return [n for n in self.neighbors() if n.is_mine]
+
+    def neighbor_friendlies(self):
+        return [n for n in self.neighbors() if not n.is_mine]
+
+    def _get_neighbour(self, dix, diy):
+        """dix and diy are grid indexes, not pixels"""
+        x = self.x + dix * CELL_PX
+        y = self.y + diy * CELL_PX
+        return self.game.board.get((x, y))
+
+    def determine_number(self):
+        if not self.is_mine:
+            self.number = len(self.neighbor_mines())
+
+    def draw(self, ctx):
+        if self.should_redraw:
+            with ctx.translate(self.x, self.y):
+                return self._draw(ctx)
+
+    def _determine_template(self):
+        if self.is_revealed:
+            if self.is_mine:
+                if self.is_losing_mine:
+                    return 'mine_losing'
                 else:
-                    setColorfulHTML(one.getElement(), one.count)
-        self.check_win()
-    
-    def check_win(self):
-        if not self.started:
-            return
-        if self.count_opened_cells == self.no_of_safe_zones:
-            for one in self.bombed_cells:
-                if one.state != 1:
-                    one.setStyleName('cell bombflagged')
-                    self.flagged_cells.append(one)
-            self.started = False
-            self.set_counter()
-            self.face.setStyleName('facewin')
-            name = Window.prompt("You've done it !\n\
-                                Game Time: %s seconds\n\
-                                Number of Clicks: %s\n"
-                                "What's ur name ?" % (self.time, self.no_of_click))
-            if name and self.level in (1, 2, 3):
-                self.remote.add_score(name, self.level, self.time, \
-                                      self.no_of_click, self.remote_handler)
-                self.add_player_to_toppers(name)
-    
-    def add_player_to_toppers(self, name):
-        current_level = self.level - 1
-        toppers_in_this_level = self.toppers[current_level]
-        toppers_in_this_level.append(('<b>%s</b>' % name, self.time))
-        self.toppers[current_level] = sorted(toppers_in_this_level, \
-                                             key=lambda score: score[1])
-        self.remote_handler.load_top_scores()
-        
-    def show_all_bombs(self, bomb_explodes_on=[]):
-        self.started = False
-        self.face.setStyleName('facedead')
-        
-        for one in self.bombed_cells:
-            if one.state != 1:
-                one.setStyleName('cell bombrevealed')
-        for one in self.flagged_cells:
-            if one.count != -1:
-                one.setStyleName('cell bombmisflagged')
-        
-        for one in bomb_explodes_on:
-            one.setStyleName('cell bombdeath')
-    
-    def next_game(self, row, column, no_of_bomb=None):
-        if row < self.row and column < self.column:
-            self.row, self.column = row, column
-            self.grid.resize(row, column)
-            self.restart(no_of_bomb)
+                    return 'mine'
+            elif self.number:
+                return 'number%d' % self.number
+            else:
+                return 'empty'
         else:
-            self.row, self.column = row, column
-            self.grid_panel.remove(self.grid)
-            self.create_grid()
-            self.start(no_of_bomb)
-    
-    def restart(self, no_of_bomb=None):
-        for one in self.get_all_cells():
-            one.count = 0
-            one.state = 0
-            one.setStyleName('blank')
-            DOM.setInnerHTML(one.getElement(), '')
-        self.start(no_of_bomb)
+            if self.is_game_over and self.is_mine:
+                return 'mine_unrevealed'
+            else:
+                return 'unrevealed'
 
-if __name__ == '__main__':
-    pyjd.setup("./public/minesweeper.html")
+    def _draw(self, ctx):
+        """
+        :type ctx: plotdevice.context.Context
+        """
+        template = self._determine_template()
+        if template:
+            image = self.game.templates[template]
+            ctx.image(image, 0, 0)
 
-    LOG = HTMLPanel('', StyleName='log')
-    SCORES = HTMLPanel('', StyleName='scores')
-    game = Game(8, 8)
-    
-    ADD(RootPanel('content'), game, SCORES, LOG)
+    def handle_click(self):
+        if not self.is_revealed:
+            self.is_revealed = True
 
-    pyjd.run()
+            if self.is_mine:
+                self.is_losing_mine = True
+                self.game.lose()
+            elif self.number == 0:
+                self.cascade_empty(self)
+
+    def cascade_empty(self, cell):
+        """Reveal all neighbours of empty cells, recursively"""
+        friendlies = cell.neighbor_friendlies()
+        unrevealed = [c for c in friendlies if not c.is_revealed]
+        for c in unrevealed:
+            c.is_revealed = True
+            if c.number == 0:
+                self.cascade_empty(c)
+
+
+class Game(object):
+    def __init__(self, ctx):
+        """
+        :type ctx: plotdevice.context.Context
+        """
+        self.ctx = ctx
+        self.init_ctx()
+
+        self.templates = Templates()
+
+        self.init_game()
+
+    def init_game(self):
+        self.lost = False
+        self.restart_frame = None
+
+        self.was_mousedown = False
+        self.mousedown_cell = None
+
+        self.board = {(x,y): Cell(self, x, y)
+                      for x, y in self.grid()}
+        self.choose_mines()
+        self.determine_numbers()
+
+    def init_ctx(self):
+        # Initialize window
+        self.ctx.size(BOARD_WIDTH * CELL_PX + MARGIN_PX * 2,
+                      BOARD_HEIGHT * CELL_PX + MARGIN_PX * 2)
+
+        self.ctx.speed(FPS)
+
+    def grid(self):
+        return grid(BOARD_WIDTH, BOARD_HEIGHT, CELL_PX, CELL_PX)
+
+    def choose_mines(self):
+        possibilities = self.board.values()
+        random.shuffle(possibilities)
+        mines = possibilities[:MINES]
+        for cell in mines:
+            cell.is_mine = True
+
+    def draw(self, something):
+        self.handle_restart()
+        self.handle_mouse()
+
+        for x, y in self.grid():
+            cell = self.board[x, y]
+
+            # Margin
+            with self.ctx.translate(MARGIN_PX, MARGIN_PX):
+                cell.draw(self.ctx)
+
+    def handle_mouseup(self):
+        mouseup_cell = self.get_cell_under_mouse()
+        if mouseup_cell is self.mousedown_cell:
+            mouseup_cell.handle_click()
+
+    def handle_mouse(self):
+        if self.ctx.mousedown:
+            self.mousedown_cell = self.get_cell_under_mouse()
+            self.was_mousedown = True
+        else:
+            if self.was_mousedown:
+                self.handle_mouseup()
+
+            # Reset mouse state
+            self.was_mousedown = False
+            self.mousedown_cell = None
+
+    def get_cell_under_mouse(self):
+        x, y = self.ctx.MOUSEX, self.ctx.MOUSEY
+        x, y = x - MARGIN_PX, y - MARGIN_PX
+        x, y = int(x) / CELL_PX, int(y) / CELL_PX
+        x, y = x * CELL_PX, y * CELL_PX
+        return self.board[x, y]
+
+    def determine_numbers(self):
+        for cell in self.board.itervalues():
+            cell.determine_number()
+
+    def lose(self):
+        self.lost = True
+
+        for cell in self.board.itervalues():
+            cell.is_game_over = True
+
+        self.restart_frame = self.ctx.FRAME + 30
+
+    def handle_restart(self):
+        if self.restart_frame and self.ctx.FRAME >= self.restart_frame:
+            self.init_game()
+
+
+class DictProxy(object):
+    """Proxy attributes to dict items"""
+
+    def __init__(self, d):
+        self.__source = d
+
+    def __getattr__(self, item):
+        try:
+            return self.__source[item]
+        except KeyError:
+            raise AttributeError(repr(item))
+
+
+game = Game(DictProxy(globals()))
+draw = game.draw
