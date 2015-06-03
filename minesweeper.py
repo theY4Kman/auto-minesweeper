@@ -68,6 +68,7 @@ class Templates(object):
             'mine_unrevealed': self._draw_mine_unrevealed,
             'unrevealed': self._draw_unrevealed,
             'empty': lambda ctx: None,
+            'flag': self._draw_flag,
         }
         self._templates = {}
 
@@ -123,6 +124,24 @@ class Templates(object):
         """A mine which hasn't been revealed, but the game is over"""
         self._draw_unrevealed(ctx)
         self._draw_mine(ctx)
+
+    def _draw_flag(self, ctx):
+        self._draw_unrevealed(ctx)
+
+        flag_w, flag_h = 5, 5
+        margin = 4
+
+        with ctx.translate(CELL_PX / 2, margin):
+            ctx.strokewidth(2)
+            with ctx.stroke('black'), ctx.bezier():
+                ctx.moveto(0, 0)
+                ctx.lineto(0, CELL_PX - margin * 2)
+
+            ctx.strokewidth(0)
+            with ctx.fill('darkred'), ctx.bezier():
+                ctx.moveto(0, 0)
+                ctx.lineto(flag_w, flag_h / 2)
+                ctx.lineto(0, flag_h, close=True)
 
     def _draw_unrevealed(self, ctx):
         """The signature bezel!"""
