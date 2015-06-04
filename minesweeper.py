@@ -1,16 +1,11 @@
 import os
 import sys
+
 from random import SystemRandom
-
-# This sets up a Context for us; it MUST be an asterisk import
-from plotdevice import *
-
-from plotdevice.context import Context, Canvas
-from plotdevice.gfx.image import Image
-from plotdevice.gfx.typography import CENTER
-from plotdevice.util import grid
-
 random = SystemRandom()
+
+import pygame
+pygame.init()
 
 
 ROOT_DIR = os.path.dirname(sys.argv[0])
@@ -21,10 +16,11 @@ except OSError:
     pass
 
 
-FPS = 60
+FPS = 120
+TICK = 1000 / FPS
 
 # Board size in cells
-BOARD_SIZE = 32, 16
+BOARD_SIZE = 30, 16
 BOARD_WIDTH, BOARD_HEIGHT = BOARD_SIZE
 
 # Number of mines
@@ -40,134 +36,34 @@ BORDER_PX_0 = BORDER_PX - 1
 # Board margin
 MARGIN_PX = 10
 
-NUMBER_COLORS = {
-    1: 'blue',
-    2: 'green',
-    3: 'red',
-    4: 'darkblue',
-    5: 'brown',
-    6: 'cyan',
-    7: 'black',
-    8: 'gray',
-}
 
-
-class Templates(object):
-    """Responsible for drawing initial pictures of each possible cell state"""
+class Sprites(object):
+    _sprite_names = {
+        'empty',
+        'flag',
+        'flag_wrong',
+        'mine_losing',
+        'mine_unrevealed',
+        'number1',
+        'number2',
+        'number3',
+        'number4',
+        'number5',
+        'number6',
+        'number7',
+        'number8',
+        'unrevealed',
+    }
 
     def __init__(self):
-        """
-        :type ctx: plotdevice.context.Context
-        """
-        self.ctx = Context(Canvas(CELL_PX, CELL_PX))
-        self.ctx.clear()
-
-        self._template_fns = {
-            'mine': self._draw_mine,
-            'mine_losing': lambda ctx: self._draw_mine(ctx, losing=True),
-            'mine_unrevealed': self._draw_mine_unrevealed,
-            'unrevealed': self._draw_unrevealed,
-            'empty': lambda ctx: None,
-            'flag': self._draw_flag,
-        }
-        self._templates = {}
-
-        def build_number_fn(i):
-            # Embed constant in closure scope
-            return lambda ctx: self._draw_number(ctx, i)
-        for i in xrange(1, 9):
-            self._template_fns['number%d' % i] = build_number_fn(i)
-
-        self._render_templates()
+        self._sprites = {}
+        for name in self._sprite_names:
+            image = pygame.image.load(os.path.join(IMAGE_DIR, name + '.png'))
+            self._sprites[name] = image
+            setattr(self, name, image)
 
     def __getitem__(self, item):
-        return self._templates[item]
-
-    def _render_templates(self):
-        for name, fn in self._template_fns.iteritems():
-            tmpl = self._render_template(name, fn)
-            self._templates[name] = tmpl
-            setattr(self, name, tmpl)
-
-    def _render_template(self, name, fn):
-        filename = os.path.join(IMAGE_DIR, name + '.png')
-        if not os.path.exists(filename):
-            self.ctx.clear()
-            with self.ctx.export(filename):
-                # Default background colour
-                with self.ctx.fill('lightgray'):
-                    self.ctx.rect(0, 0, CELL_PX, CELL_PX)
-                fn(self.ctx)
-            self.ctx.clear()
-
-        return Image(filename)
-
-    def _draw_number(self, ctx, number):
-        """
-        :type ctx: plotdevice.context.Context
-        """
-        with ctx.fill(NUMBER_COLORS[number]):
-            ctx.align(CENTER)
-            t = ctx.text(str(number), x=0, y=CELL_PX, width=CELL_PX,
-                         size=11, weight='bold', plot=False)
-            w,h = ctx.measure(t)
-            t.y = CELL_PX - (float(CELL_PX) - h / 2) / 2
-            ctx.plot(t)
-
-    def _draw_mine(self, ctx, losing=False):
-        color = 'red' if losing else 'black'
-        with ctx.translate(CELL_PX / 2 / 2, CELL_PX / 2 / 2), \
-             ctx.fill(color):
-            ctx.oval(0, 0, CELL_PX / 2, CELL_PX / 2)
-
-    def _draw_mine_unrevealed(self, ctx):
-        """A mine which hasn't been revealed, but the game is over"""
-        self._draw_unrevealed(ctx)
-        self._draw_mine(ctx)
-
-    def _draw_flag(self, ctx):
-        self._draw_unrevealed(ctx)
-
-        flag_w, flag_h = 5, 5
-        margin = 4
-
-        with ctx.translate(CELL_PX / 2, margin):
-            ctx.strokewidth(2)
-            with ctx.stroke('black'), ctx.bezier():
-                ctx.moveto(0, 0)
-                ctx.lineto(0, CELL_PX - margin * 2)
-
-            ctx.strokewidth(0)
-            with ctx.fill('darkred'), ctx.bezier():
-                ctx.moveto(0, 0)
-                ctx.lineto(flag_w, flag_h / 2)
-                ctx.lineto(0, flag_h, close=True)
-
-    def _draw_unrevealed(self, ctx):
-        """The signature bezel!"""
-        # Start with a light, light grey background
-        with ctx.fill('#eee'):
-            ctx.rect(0, 0, CELL_PX, CELL_PX)
-
-        with ctx.nostroke():
-            # Left, top border
-            with ctx.fill('black', 0.1), ctx.bezier():
-                ctx.moveto(0, 0)
-                ctx.lineto(CELL_PX, 0)
-                ctx.lineto(CELL_PX - BORDER_PX_0, BORDER_PX_0)
-                ctx.lineto(BORDER_PX_0, BORDER_PX_0)
-                ctx.lineto(BORDER_PX_0, CELL_PX - BORDER_PX_0)
-                ctx.lineto(0, CELL_PX, close=True)
-
-            # Right, bottom border
-            with ctx.fill('black', 0.3), ctx.bezier():
-                ctx.moveto(CELL_PX, CELL_PX)
-                ctx.lineto(CELL_PX, 0)
-                ctx.lineto(CELL_PX - BORDER_PX_0, BORDER_PX_0)
-                ctx.lineto(CELL_PX - BORDER_PX_0, CELL_PX - BORDER_PX_0)
-                ctx.lineto(BORDER_PX_0, CELL_PX - BORDER_PX_0)
-                ctx.lineto(0, CELL_PX)
-                ctx.lineto(CELL_PX, CELL_PX, close=True)
+        return self._sprites[item]
 
 
 def redraw_prop(attr):
@@ -184,11 +80,12 @@ def redraw_prop(attr):
 
 
 class Cell(object):
-    def __init__(self, game, x, y,
+    def __init__(self, game, i_x, i_y, rect,
                  is_mine=False, is_flagged=False, is_revealed=False):
         self.game = game
-        self.x = x
-        self.y = y
+        self.i_x = i_x
+        self.i_y = i_y
+        self.rect = rect
 
         self._is_mine = is_mine
         self._is_flagged = is_flagged
@@ -229,22 +126,23 @@ class Cell(object):
     def neighbor_friendlies(self):
         return [n for n in self.neighbors() if not n.is_mine]
 
-    def _get_neighbour(self, dix, diy):
-        """dix and diy are grid indexes, not pixels"""
-        x = self.x + dix * CELL_PX
-        y = self.y + diy * CELL_PX
-        return self.game.board.get((x, y))
+    def neighbor_flags(self):
+        return [n for n in self.neighbors() if n.is_flagged]
+
+    def _get_neighbour(self, di_x, di_y):
+        """dix and diy are grid indexes"""
+        return self.game.board.get((self.i_x + di_x, self.i_y + di_y))
 
     def determine_number(self):
         if not self.is_mine:
             self.number = len(self.neighbor_mines())
 
-    def draw(self, ctx):
+    def draw(self):
         if self.should_redraw:
-            with ctx.translate(self.x, self.y):
-                return self._draw(ctx)
+            self.should_redraw = False
+            return self._draw()
 
-    def _determine_template(self):
+    def _determine_sprite(self):
         if self.is_revealed:
             if self.is_mine:
                 if self.is_losing_mine:
@@ -258,21 +156,25 @@ class Cell(object):
         else:
             if self.is_game_over and self.is_mine:
                 return 'mine_unrevealed'
+            elif self.is_flagged:
+                if self.is_mine or not self.is_game_over:
+                    return 'flag'
+                else:
+                    return 'flag_wrong'
             else:
                 return 'unrevealed'
 
-    def _draw(self, ctx):
-        """
-        :type ctx: plotdevice.context.Context
-        """
-        template = self._determine_template()
-        if template:
-            image = self.game.templates[template]
-            ctx.image(image, 0, 0)
+    def _draw(self):
+        sprite = self._determine_sprite()
+        if sprite:
+            image = self.game.sprites[sprite]
+            self.game.screen.blit(image, self.rect)
+            return True
 
     def handle_click(self):
-        if not self.is_revealed:
+        if not self.is_revealed and not self.is_flagged:
             self.is_revealed = True
+            self.game.on_cell_reveal(self)
 
             if self.is_mine:
                 self.is_losing_mine = True
@@ -280,10 +182,31 @@ class Cell(object):
             elif self.number == 0:
                 self.cascade_empty(self)
 
+    def handle_middleclick(self):
+        if self.number is not None:
+            self.cascade()
+
+    def handle_rightclick(self):
+        if not self.is_revealed:
+            self.is_flagged = not self.is_flagged
+
+    def cascade(self):
+        """Reveal all unflagged neighbours if we have flagged the right amt"""
+        should_cascade = len(self.neighbor_flags()) == self.number
+        if should_cascade:
+            self._cascade()
+
+    def _cascade(self):
+        to_reveal = [c for c in self.neighbors() if not (c.is_flagged or
+                                                         c.is_revealed)]
+        for cell in to_reveal:
+            cell.handle_click()
+
     def cascade_empty(self, cell):
         """Reveal all neighbours of empty cells, recursively"""
         friendlies = cell.neighbor_friendlies()
-        unrevealed = [c for c in friendlies if not c.is_revealed]
+        unrevealed = [c for c in friendlies if not (c.is_revealed or
+                                                    c.is_flagged)]
         for c in unrevealed:
             c.is_revealed = True
             if c.number == 0:
@@ -291,38 +214,38 @@ class Cell(object):
 
 
 class Game(object):
-    def __init__(self, ctx):
-        """
-        :type ctx: plotdevice.context.Context
-        """
-        self.ctx = ctx
-        self.init_ctx()
+    sprites = Sprites()
 
-        self.templates = Templates()
+    def __init__(self):
+        self.halt = False
+        self.screen = pygame.display.set_mode([
+            BOARD_WIDTH * CELL_PX + MARGIN_PX * 2,
+            BOARD_HEIGHT * CELL_PX + MARGIN_PX * 2,
+        ])
+        self.clock = pygame.time.Clock()
 
         self.init_game()
 
     def init_game(self):
         self.lost = False
-        self.restart_frame = None
 
-        self.was_mousedown = False
+        # Whether a square has been revealed
+        self.has_revealed = False
         self.mousedown_cell = None
 
-        self.board = {(x,y): Cell(self, x, y)
-                      for x, y in self.grid()}
+        self.board = {(i_x, i_y): Cell(self, i_x, i_y,
+                                       pygame.Rect(x, y, CELL_PX, CELL_PX))
+                      for i_x, x, i_y, y in self.grid()}
         self.choose_mines()
         self.determine_numbers()
 
-    def init_ctx(self):
-        # Initialize window
-        self.ctx.size(BOARD_WIDTH * CELL_PX + MARGIN_PX * 2,
-                      BOARD_HEIGHT * CELL_PX + MARGIN_PX * 2)
-
-        self.ctx.speed(FPS)
-
     def grid(self):
-        return grid(BOARD_WIDTH, BOARD_HEIGHT, CELL_PX, CELL_PX)
+        w = BOARD_WIDTH * CELL_PX
+        h = BOARD_HEIGHT * CELL_PX
+
+        for i_x, x in enumerate(xrange(MARGIN_PX, MARGIN_PX + w, CELL_PX)):
+            for i_y, y in enumerate(xrange(MARGIN_PX, MARGIN_PX + h, CELL_PX)):
+                yield i_x, x, i_y, y
 
     def choose_mines(self):
         possibilities = self.board.values()
@@ -331,70 +254,92 @@ class Game(object):
         for cell in mines:
             cell.is_mine = True
 
-    def draw(self, something):
-        self.handle_restart()
-        self.handle_mouse()
-
-        for x, y in self.grid():
-            cell = self.board[x, y]
-
-            # Margin
-            with self.ctx.translate(MARGIN_PX, MARGIN_PX):
-                cell.draw(self.ctx)
-
-    def handle_mouseup(self):
-        mouseup_cell = self.get_cell_under_mouse()
-        if mouseup_cell is self.mousedown_cell:
-            mouseup_cell.handle_click()
-
-    def handle_mouse(self):
-        if self.ctx.mousedown:
-            self.mousedown_cell = self.get_cell_under_mouse()
-            self.was_mousedown = True
-        else:
-            if self.was_mousedown:
-                self.handle_mouseup()
-
-            # Reset mouse state
-            self.was_mousedown = False
-            self.mousedown_cell = None
-
-    def get_cell_under_mouse(self):
-        x, y = self.ctx.MOUSEX, self.ctx.MOUSEY
-        x, y = x - MARGIN_PX, y - MARGIN_PX
-        x, y = int(x) / CELL_PX, int(y) / CELL_PX
-        x, y = x * CELL_PX, y * CELL_PX
-        return self.board[x, y]
-
     def determine_numbers(self):
         for cell in self.board.itervalues():
             cell.determine_number()
 
+    def get_cell_under_mouse(self, x, y):
+        x, y = x - MARGIN_PX, y - MARGIN_PX
+        i_x, i_y = int(x) / CELL_PX, int(y) / CELL_PX
+        return self.board.get((i_x, i_y))
+
     def lose(self):
         self.lost = True
-
         for cell in self.board.itervalues():
             cell.is_game_over = True
 
-        self.restart_frame = self.ctx.FRAME + 30
+    def on_cell_reveal(self, cell):
+        self.has_revealed = True
 
-    def handle_restart(self):
-        if self.restart_frame and self.ctx.FRAME >= self.restart_frame:
-            self.init_game()
+    def run(self):
+        self.halt = False
+        self.mainloop()
+
+    def mainloop(self):
+        dirty_rects = []
+        mousedown_cell = None
+        mousedown_button = None
+
+        while not self.halt:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.halt = True
+
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    mousedown_cell = self.get_cell_under_mouse(*event.pos)
+                    mousedown_button = event.button
+
+                elif event.type == pygame.MOUSEBUTTONUP:
+                    if mousedown_button == event.button:
+                        mouseup_cell = self.get_cell_under_mouse(*event.pos)
+                        if not self.lost and (mouseup_cell and
+                                              mouseup_cell is mousedown_cell):
+                            if event.button == 1:
+                                if not self.has_revealed and mouseup_cell.is_mine:
+                                    self.reconfigure_board(mouseup_cell)
+                                mouseup_cell.handle_click()
+                            if event.button == 2:
+                                mouseup_cell.handle_middleclick()
+                            elif event.button == 3:
+                                mouseup_cell.handle_rightclick()
+
+                        elif self.lost and mouseup_cell is None:
+                            # The margin has been clicked, restart
+                            self.init_game()
+
+                    mousedown_cell = None
+                    mousedown_button = None
+
+            for cell in self.board.itervalues():
+                if cell.draw():
+                    dirty_rects.append(cell)
+
+            if dirty_rects:
+                pygame.display.update(dirty_rects)
+                dirty_rects = []
+
+            self.clock.tick(TICK)
+
+        if self.halt:
+            pygame.quit()
+
+    def reconfigure_board(self, cell):
+        """Moves a mine if it's the first cell clicked"""
+        cells = self.board.values()
+        random.shuffle(cells)
+        while cells:
+            possible_cell = cells.pop()
+            if possible_cell is cell:
+                continue
+            if possible_cell.is_mine:
+                continue
+
+            possible_cell.is_mine = True
+            cell.is_mine = False
+            break
+        self.determine_numbers()
 
 
-class DictProxy(object):
-    """Proxy attributes to dict items"""
-
-    def __init__(self, d):
-        self.__source = d
-
-    def __getattr__(self, item):
-        try:
-            return self.__source[item]
-        except KeyError:
-            raise AttributeError(repr(item))
-
-
-game = Game(DictProxy(globals()))
-draw = game.draw
+if __name__ == '__main__':
+    game = Game()
+    game.run()
