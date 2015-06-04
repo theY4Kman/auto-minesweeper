@@ -10,10 +10,7 @@ pygame.init()
 
 ROOT_DIR = os.path.dirname(sys.argv[0])
 IMAGE_DIR = os.path.join(ROOT_DIR, 'images')
-try:
-    os.makedirs(IMAGE_DIR)
-except OSError:
-    pass
+FONT_DIR = os.path.join(ROOT_DIR, 'fonts')
 
 
 FPS = 120
@@ -33,8 +30,12 @@ CELL_PX = 16
 BORDER_PX = 3
 BORDER_PX_0 = BORDER_PX - 1
 
+SCOREBOARD_HEIGHT = 50
+
 # Board margin
 MARGIN_PX = 10
+
+BG_COLOR = (220, 220, 220)
 
 
 class Sprites(object):
@@ -174,7 +175,7 @@ class Cell(object):
     def handle_click(self):
         if not self.is_revealed and not self.is_flagged:
             self.is_revealed = True
-            self.game.on_cell_reveal(self)
+            self.game.on_cell_revealed(self)
 
             if self.is_mine:
                 self.is_losing_mine = True
@@ -189,6 +190,10 @@ class Cell(object):
     def handle_rightclick(self):
         if not self.is_revealed:
             self.is_flagged = not self.is_flagged
+            if self.is_flagged:
+                self.game.on_cell_flagged(self)
+            else:
+                self.game.on_cell_unflagged(self)
 
     def cascade(self):
         """Reveal all unflagged neighbours if we have flagged the right amt"""
@@ -217,17 +222,31 @@ class Game(object):
     sprites = Sprites()
 
     def __init__(self):
+        self.init_pygame()
+        self.init_game()
+
+    def init_pygame(self):
         self.halt = False
         self.screen = pygame.display.set_mode([
             BOARD_WIDTH * CELL_PX + MARGIN_PX * 2,
-            BOARD_HEIGHT * CELL_PX + MARGIN_PX * 2,
+            BOARD_HEIGHT * CELL_PX + MARGIN_PX * 2 + SCOREBOARD_HEIGHT,
         ])
+        self.screen.fill(BG_COLOR)
         self.clock = pygame.time.Clock()
 
-        self.init_game()
+        self.scoreboard_rect = pygame.Rect(MARGIN_PX, MARGIN_PX,
+                                           100, SCOREBOARD_HEIGHT)
+
+        font_path = os.path.join(FONT_DIR, 'VT323-Regular.ttf')
+        self.scoreboard_font = pygame.font.Font(font_path, 36)
+
+        pygame.display.set_caption('Minesweeper')
 
     def init_game(self):
         self.lost = False
+
+        self.mines_left = MINES
+        self._last_mines_left = None
 
         # Whether a square has been revealed
         self.has_revealed = False
@@ -244,7 +263,9 @@ class Game(object):
         h = BOARD_HEIGHT * CELL_PX
 
         for i_x, x in enumerate(xrange(MARGIN_PX, MARGIN_PX + w, CELL_PX)):
-            for i_y, y in enumerate(xrange(MARGIN_PX, MARGIN_PX + h, CELL_PX)):
+            for i_y, y in enumerate(xrange(MARGIN_PX + SCOREBOARD_HEIGHT,
+                                           SCOREBOARD_HEIGHT + MARGIN_PX + h,
+                                           CELL_PX)):
                 yield i_x, x, i_y, y
 
     def choose_mines(self):
@@ -259,7 +280,7 @@ class Game(object):
             cell.determine_number()
 
     def get_cell_under_mouse(self, x, y):
-        x, y = x - MARGIN_PX, y - MARGIN_PX
+        x, y = x - MARGIN_PX, y - MARGIN_PX - SCOREBOARD_HEIGHT
         i_x, i_y = int(x) / CELL_PX, int(y) / CELL_PX
         return self.board.get((i_x, i_y))
 
@@ -268,8 +289,35 @@ class Game(object):
         for cell in self.board.itervalues():
             cell.is_game_over = True
 
-    def on_cell_reveal(self, cell):
+    def on_cell_revealed(self, cell):
         self.has_revealed = True
+
+    def on_cell_flagged(self, cell):
+        self.mines_left -= 1
+
+    def on_cell_unflagged(self, cell):
+        self.mines_left += 1
+
+    def clear_score(self):
+        self.screen.fill((0, 0, 0), self.scoreboard_rect)
+
+    def draw_score(self):
+        self.clear_score()
+
+        text = '%02d' % self.mines_left
+        color = (0, 255, 0)
+        scoreboard = self.scoreboard_font.render(text, 1, color)
+        self.screen.blit(scoreboard, self.scoreboard_rect)
+
+    def handle_click(self, button, cell):
+        if button == 1:
+            if not self.has_revealed and cell.is_mine:
+                self.reconfigure_board(cell)
+            cell.handle_click()
+        if button == 2:
+            cell.handle_middleclick()
+        elif button == 3:
+            cell.handle_rightclick()
 
     def run(self):
         self.halt = False
@@ -294,14 +342,7 @@ class Game(object):
                         mouseup_cell = self.get_cell_under_mouse(*event.pos)
                         if not self.lost and (mouseup_cell and
                                               mouseup_cell is mousedown_cell):
-                            if event.button == 1:
-                                if not self.has_revealed and mouseup_cell.is_mine:
-                                    self.reconfigure_board(mouseup_cell)
-                                mouseup_cell.handle_click()
-                            if event.button == 2:
-                                mouseup_cell.handle_middleclick()
-                            elif event.button == 3:
-                                mouseup_cell.handle_rightclick()
+                            self.handle_click(event.button, mouseup_cell)
 
                         elif self.lost and mouseup_cell is None:
                             # The margin has been clicked, restart
@@ -313,6 +354,10 @@ class Game(object):
             for cell in self.board.itervalues():
                 if cell.draw():
                     dirty_rects.append(cell)
+
+            if self._last_mines_left != self.mines_left:
+                self.draw_score()
+                dirty_rects.append(self.scoreboard_rect)
 
             if dirty_rects:
                 pygame.display.update(dirty_rects)
