@@ -7,6 +7,8 @@ random = SystemRandom()
 import pygame
 pygame.init()
 
+from minesweeper.director.base import BaseControl, Cell as DirectorCell
+
 
 ROOT_DIR = os.path.dirname(sys.argv[0])
 IMAGE_DIR = os.path.join(ROOT_DIR, 'images')
@@ -37,6 +39,9 @@ MARGIN_PX = 10
 
 BG_COLOR = (220, 220, 220)
 
+# Number of frames to skip in between director actions
+DIRECTOR_SKIP_FRAMES = 5
+
 
 class Sprites(object):
     _sprite_names = {
@@ -63,8 +68,22 @@ class Sprites(object):
             self._sprites[name] = image
             setattr(self, name, image)
 
+        for name, color in (
+                ('left_click', (255, 0, 0)),
+                ('middle_click', (0, 255, 0)),
+                ('right_click', (0, 0, 255)),
+        ):
+            surface = pygame.Surface((CELL_PX, CELL_PX))
+            surface.set_alpha(128)
+            surface.fill(color)
+            self[name] = surface
+
     def __getitem__(self, item):
         return self._sprites[item]
+
+    def __setitem__(self, key, value):
+        self._sprites[key] = value
+        setattr(self, key, value)
 
 
 def redraw_prop(attr):
@@ -183,11 +202,11 @@ class Cell(object):
             elif self.number == 0:
                 self.cascade_empty(self)
 
-    def handle_middleclick(self):
+    def handle_middle_click(self):
         if self.number is not None:
             self.cascade()
 
-    def handle_rightclick(self):
+    def handle_right_click(self):
         if not self.is_revealed:
             self.is_flagged = not self.is_flagged
             if self.is_flagged:
@@ -218,14 +237,147 @@ class Cell(object):
                 self.cascade_empty(c)
 
 
+class GameControl(BaseControl):
+    def __init__(self, game):
+        self._game = game
+        self._cells = None
+        self._cell_map = None
+
+    def reset_cache(self):
+        """Used by the Game to reset cache, causing cells to be recomputed"""
+        self._cells = None
+        self._cell_map = None
+
+    def _get_cell_err(self, x, y):
+        cell = self._get_raw_cell(x, y)
+        if cell is None:
+            raise IndexError('No cell at (%d, %d)' % (x, y))
+        return cell
+
+    def _get_raw_cell(self, x, y):
+        return self._game.board.get((x, y))
+
+    def get_cell(self, x, y):
+        return self._cell_map.get((x, y))
+
+    def _convert_cell(self, raw_cell):
+        sprite = raw_cell._determine_sprite()
+        if sprite.startswith('number'):
+            type_ = raw_cell.number
+        else:
+            type_ = {
+                'number0': DirectorCell.TYPE_NUMBER0,
+                'flag': DirectorCell.TYPE_FLAG,
+                'unrevealed': DirectorCell.TYPE_UNREVEALED,
+            }.get(sprite)
+        return DirectorCell(self, raw_cell.i_x, raw_cell.i_y, type_)
+
+    def get_cells(self):
+        if self._cells is None:
+            cells = map(self._convert_cell, self._game.board.itervalues())
+            cells.sort(key=lambda c: (c.x, c.y))
+            self._cells = cells
+            self._cell_map = {(c.x, c.y): c for c  in cells}
+        return self._cells
+
+    def click(self, x, y):
+        cell = self._get_cell_err(x, y)
+        return self._game.handle_click(1, cell)
+
+    def right_click(self, x, y):
+        cell = self._get_cell_err(x, y)
+        return self._game.handle_click(3, cell)
+
+    def middle_click(self, x, y):
+        cell = self._get_cell_err(x, y)
+        return self._game.handle_click(2, cell)
+
+
+class QueuedControl(BaseControl):
+    """Queues actions to be performed later, allows marking of actions"""
+
+    def __init__(self, control):
+        """
+        :type control: BaseControl
+        """
+        self._control = control
+        self._queue = []
+
+    def reset_cache(self):
+        self._control.reset_cache()
+
+    def get_cell(self, x, y):
+        cell = self._control.get_cell(x, y)
+        cell._control = self
+        return cell
+
+    def get_cells(self):
+        cells = self._control.get_cells()
+        for cell in cells:
+            cell._control = self
+        return cells
+
+    def click(self, x, y):
+        self._queue.append((1, x, y, lambda: self._control.click(x, y)))
+
+    def right_click(self, x, y):
+        self._queue.append((3, x, y, lambda: self._control.right_click(x, y)))
+
+    def middle_click(self, x, y):
+        self._queue.append((2, x, y, lambda: self._control.middle_click(x, y)))
+
+    def exec_queue(self):
+        queue = self._queue[::-1]
+        try:
+            while queue:
+                _, _, _, func = queue.pop()
+                func()
+        finally:
+            self._queue = queue[::-1]
+
+    def clear_queue(self):
+        self._queue = []
+
+    def get_actions(self):
+        for button, x, y, _ in self._queue:
+            yield button, x, y
+
+
 class Game(object):
     sprites = Sprites()
 
+    director_buttons = {
+        1: sprites.left_click,
+        2: sprites.middle_click,
+        3: sprites.right_click,
+    }
+
     def __init__(self):
+        # Declarations
+        self.director = None
+        self.director_control = None
+        self.director_act_at = None
+
+        self.frame = None
+        self.halt = None
+        self.screen = None
+        self.clock = None
+        self.scoreboard_rect = None
+        self.scoreboard_font = None
+
+        self.lost = None
+        self.mines_left = None
+        self._last_mines_left = None
+        self.has_revealed = None
+        self.mousedown_cell = None
+        self.board = None
+
+        # Initializations
         self.init_pygame()
         self.init_game()
 
     def init_pygame(self):
+        self.frame = 0
         self.halt = False
         self.screen = pygame.display.set_mode([
             BOARD_WIDTH * CELL_PX + MARGIN_PX * 2,
@@ -244,6 +396,10 @@ class Game(object):
 
     def init_game(self):
         self.lost = False
+        self.director_act_at = self.frame + DIRECTOR_SKIP_FRAMES
+
+        if self.director_control:
+            self.director_control.clear_queue()
 
         self.mines_left = MINES
         self._last_mines_left = None
@@ -274,6 +430,11 @@ class Game(object):
         mines = possibilities[:MINES]
         for cell in mines:
             cell.is_mine = True
+
+    def set_director(self, director):
+        self.director = director
+        self.director_control = QueuedControl(GameControl(self))
+        self.director.set_control(self.director_control)
 
     def determine_numbers(self):
         for cell in self.board.itervalues():
@@ -309,15 +470,25 @@ class Game(object):
         scoreboard = self.scoreboard_font.render(text, 1, color)
         self.screen.blit(scoreboard, self.scoreboard_rect)
 
+    def draw_director_actions(self):
+        dirty = []
+        for button, x, y in self.director_control.get_actions():
+            cell = self.board.get((x, y))
+            if cell:
+                surface = self.director_buttons[button]
+                self.screen.blit(surface, cell.rect)
+                dirty.append(cell.rect)
+        return dirty
+
     def handle_click(self, button, cell):
         if button == 1:
             if not self.has_revealed and cell.is_mine:
                 self.reconfigure_board(cell)
             cell.handle_click()
         if button == 2:
-            cell.handle_middleclick()
+            cell.handle_middle_click()
         elif button == 3:
-            cell.handle_rightclick()
+            cell.handle_right_click()
 
     def run(self):
         self.halt = False
@@ -329,6 +500,8 @@ class Game(object):
         mousedown_button = None
 
         while not self.halt:
+            self.frame += 1
+
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.halt = True
@@ -350,6 +523,20 @@ class Game(object):
 
                     mousedown_cell = None
                     mousedown_button = None
+
+            # Director acting!
+            if not self.lost and self.director:
+                if self.frame >= self.director_act_at:
+                    # Perform queued actions
+                    self.director_control.exec_queue()
+
+                    # Determine next moves
+                    self.director_control.reset_cache()
+                    self.director.act()
+                    self.director_act_at = self.frame + DIRECTOR_SKIP_FRAMES
+
+                    # Display next actions
+                    dirty_rects += self.draw_director_actions()
 
             for cell in self.board.itervalues():
                 if cell.draw():
@@ -383,8 +570,3 @@ class Game(object):
             cell.is_mine = False
             break
         self.determine_numbers()
-
-
-if __name__ == '__main__':
-    game = Game()
-    game.run()
