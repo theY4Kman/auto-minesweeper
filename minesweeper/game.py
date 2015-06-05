@@ -94,7 +94,7 @@ def redraw_prop(attr):
     @prop.setter
     def prop(self, value):
         setattr(self, attr, value)
-        self.should_redraw = True
+        self.mark_dirty()
 
     return prop
 
@@ -127,6 +127,10 @@ class Cell(object):
     is_flagged = redraw_prop('_is_flagged')
     is_revealed = redraw_prop('_is_revealed')
     is_game_over = redraw_prop('_is_game_over')
+
+    def mark_dirty(self):
+        """Mark the cell for drawing next frame"""
+        self.should_redraw = True
 
     def neighbors(self):
         return filter(None, map(lambda t: self._get_neighbour(*t), [
@@ -358,6 +362,7 @@ class Game(object):
         self.director = None
         self.director_control = None
         self.director_act_at = None
+        self.director_cell_redraw = None
 
         self.frame = None
         self.halt = None
@@ -398,6 +403,7 @@ class Game(object):
     def init_game(self):
         self.lost = False
         self.director_act_at = self.frame + DIRECTOR_SKIP_FRAMES
+        self.director_cell_redraw = []
 
         if self.director_control:
             self.director_control.clear_queue()
@@ -479,7 +485,16 @@ class Game(object):
                 surface = self.director_buttons[button]
                 self.screen.blit(surface, cell.rect)
                 dirty.append(cell.rect)
+
+                # Mark cell for redraw after action occurs
+                # This is necessary for cells whose clicking does not actually
+                # change state (like a number)
+                self.director_cell_redraw.append(cell)
         return dirty
+
+    def redraw_cells(self, cells):
+        for cell in cells:
+            cell.mark_dirty()
 
     def handle_click(self, button, cell):
         if button == 1:
@@ -499,8 +514,10 @@ class Game(object):
         dirty_rects = []
         mousedown_cell = None
         mousedown_button = None
+        director_redraw_cells = []
 
         while not self.halt:
+            director_acted = False
             self.frame += 1
 
             for event in pygame.event.get():
@@ -528,6 +545,9 @@ class Game(object):
             # Director acting!
             if not self.lost and self.director:
                 if self.frame >= self.director_act_at:
+                    director_redraw_cells = self.director_cell_redraw
+                    self.director_cell_redraw = []
+
                     # Perform queued actions
                     self.director_control.exec_queue()
 
@@ -539,9 +559,14 @@ class Game(object):
                     # Display next actions
                     dirty_rects += self.draw_director_actions()
 
+                    director_acted = True
+
             for cell in self.board.itervalues():
                 if cell.draw():
                     dirty_rects.append(cell)
+
+            if director_acted:
+                self.redraw_cells(director_redraw_cells)
 
             if self._last_mines_left != self.mines_left:
                 self.draw_score()

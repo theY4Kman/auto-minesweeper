@@ -43,7 +43,10 @@ class BaseControl(object):
         raise NotImplementedError
 
     def get_cells(self):
-        """Return all cells, in (y, x) ascending order"""
+        """Return all cells, in (y, x) ascending order
+
+        :rtype: list of Cell
+        """
         raise NotImplementedError
 
     def reset_cache(self):
@@ -69,6 +72,10 @@ class Cell(object):
         self.x = x
         self.y = y
         self.type = type_
+
+    @property
+    def number(self):
+        return self.type if self.is_number() else None
 
     def is_flagged(self):
         return self.type == Cell.TYPE_FLAG
@@ -98,6 +105,9 @@ class Cell(object):
         return self._control.get_cell(self.x + d_x, self.y + d_y)
 
     def get_neighbors(self):
+        """
+        :rtype: list of Cell
+        """
         all_neighbors = starmap(self.get_neighbor_at, (
             (-1, -1),
             (0, -1),
@@ -113,6 +123,9 @@ class Cell(object):
 
 class Director(object):
     def __init__(self, control=None):
+        """
+        :type control: BaseControl
+        """
         self.control = control
 
     def set_control(self, control):
