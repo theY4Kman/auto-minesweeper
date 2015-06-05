@@ -308,7 +308,8 @@ class QueuedControl(BaseControl):
 
     def get_cell(self, x, y):
         cell = self._control.get_cell(x, y)
-        cell._control = self
+        if cell:
+            cell._control = self
         return cell
 
     def get_cells(self):

@@ -82,6 +82,9 @@ class Cell(object):
     def is_unrevealed(self):
         return self.type == Cell.TYPE_UNREVEALED
 
+    def is_revealed(self):
+        return not self.is_unrevealed()
+
     def click(self):
         return self._control.click(self.x, self.y)
 
