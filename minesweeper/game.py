@@ -178,13 +178,13 @@ class Cell(object):
             else:
                 return 'empty'
         else:
-            if self.is_game_over and self.is_mine:
-                return 'mine_unrevealed'
-            elif self.is_flagged:
+            if self.is_flagged:
                 if self.is_mine or not self.is_game_over:
                     return 'flag'
                 else:
                     return 'flag_wrong'
+            elif self.is_game_over and self.is_mine:
+                return 'mine_unrevealed'
             else:
                 return 'unrevealed'
 
@@ -270,7 +270,7 @@ class GameControl(BaseControl):
             type_ = raw_cell.number
         else:
             type_ = {
-                'number0': DirectorCell.TYPE_NUMBER0,
+                'empty': DirectorCell.TYPE_NUMBER0,
                 'flag': DirectorCell.TYPE_FLAG,
                 'unrevealed': DirectorCell.TYPE_UNREVEALED,
             }.get(sprite)
@@ -295,6 +295,9 @@ class GameControl(BaseControl):
     def middle_click(self, x, y):
         cell = self._get_cell_err(x, y)
         return self._game.handle_click(2, cell)
+
+    def get_board_size(self):
+        return BOARD_SIZE
 
 
 class QueuedControl(BaseControl):
@@ -330,6 +333,9 @@ class QueuedControl(BaseControl):
 
     def middle_click(self, x, y):
         self._queue.append((2, x, y, lambda: self._control.middle_click(x, y)))
+
+    def get_board_size(self):
+        return self._control.get_board_size()
 
     def exec_queue(self):
         queue = self._queue[::-1]
@@ -372,6 +378,8 @@ class Game(object):
         self.scoreboard_font = None
 
         self.lost = None
+        self.won = None
+        self.in_play = None
         self.mines_left = None
         self._last_mines_left = None
         self.has_revealed = None
@@ -401,7 +409,8 @@ class Game(object):
         pygame.display.set_caption('Minesweeper')
 
     def init_game(self):
-        self.lost = False
+        self.lost = self.won = False
+        self.in_play = True
         self.director_act_at = self.frame + DIRECTOR_SKIP_FRAMES
         self.director_cell_redraw = []
 
@@ -454,6 +463,7 @@ class Game(object):
 
     def lose(self):
         self.lost = True
+        self.in_play = False
         for cell in self.board.itervalues():
             cell.is_game_over = True
 
@@ -472,7 +482,13 @@ class Game(object):
     def draw_score(self):
         self.clear_score()
 
-        text = '%02d' % self.mines_left
+        if self.won:
+            text = 'WIN!!!'
+        elif self.lost:
+            text = 'LOSE'
+        else:
+            text = '%02d' % self.mines_left
+
         color = (0, 255, 0)
         scoreboard = self.scoreboard_font.render(text, 1, color)
         self.screen.blit(scoreboard, self.scoreboard_rect)
@@ -531,33 +547,34 @@ class Game(object):
                 elif event.type == pygame.MOUSEBUTTONUP:
                     if mousedown_button == event.button:
                         mouseup_cell = self.get_cell_under_mouse(*event.pos)
-                        if not self.lost and (mouseup_cell and
-                                              mouseup_cell is mousedown_cell):
+                        if self.in_play and (mouseup_cell and
+                                             mouseup_cell is mousedown_cell):
                             self.handle_click(event.button, mouseup_cell)
 
-                        elif self.lost and mouseup_cell is None:
+                        elif not self.in_play and mouseup_cell is None:
                             # The margin has been clicked, restart
                             self.init_game()
 
                     mousedown_cell = None
                     mousedown_button = None
 
+            dirty_rects += self.check_winning_state()
+
             # Director acting!
-            if not self.lost and self.director:
+            if self.in_play and self.director:
                 if self.frame >= self.director_act_at:
                     director_redraw_cells = self.director_cell_redraw
                     self.director_cell_redraw = []
 
                     # Perform queued actions
                     self.director_control.exec_queue()
+                    dirty_rects += self.check_winning_state()
 
-                    # Determine next moves
-                    self.director_control.reset_cache()
-                    self.director.act()
-                    self.director_act_at = self.frame + DIRECTOR_SKIP_FRAMES
-
-                    # Display next actions
-                    dirty_rects += self.draw_director_actions()
+                    if self.in_play:
+                        # Determine next moves
+                        self.director_control.reset_cache()
+                        self.director.act()
+                        self.director_act_at = self.frame + DIRECTOR_SKIP_FRAMES
 
                     director_acted = True
 
@@ -567,6 +584,9 @@ class Game(object):
 
             if director_acted:
                 self.redraw_cells(director_redraw_cells)
+
+                # Display next actions
+                dirty_rects += self.draw_director_actions()
 
             if self._last_mines_left != self.mines_left:
                 self.draw_score()
@@ -596,3 +616,12 @@ class Game(object):
             cell.is_mine = False
             break
         self.determine_numbers()
+
+    def did_win(self):
+        return all(c.is_mine or c.is_revealed for c in self.board.itervalues())
+
+    def check_winning_state(self):
+        if self.did_win():
+            self.won = True
+            self.in_play = False
+        return []

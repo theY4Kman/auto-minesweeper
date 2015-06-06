@@ -49,6 +49,10 @@ class BaseControl(object):
         """
         raise NotImplementedError
 
+    def get_board_size(self):
+        """Return size of grid"""
+        raise NotImplementedError
+
     def reset_cache(self):
         pass
 
@@ -81,7 +85,8 @@ class Cell(object):
         return self.type == Cell.TYPE_FLAG
 
     def is_number(self):
-        return self.type <= Cell.TYPE_NUMBER8
+        # Though 0 is still a number, we never care about it like other nums
+        return self.type <= Cell.TYPE_NUMBER8 and not self.is_empty()
 
     def is_empty(self):
         return self.type == Cell.TYPE_NUMBER0
