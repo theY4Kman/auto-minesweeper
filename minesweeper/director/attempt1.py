@@ -1,3 +1,19 @@
+"""
+TODO:
+ - Grouping deductions amongst cells which don't touch:
+
+    F|2|.       F|2|.
+    F|3|.  =>   F|3|.
+    .|#|#       .|#|#
+    .|3|#       .|3|.
+
+ - Grouping deductions requiring thought among several groups:
+
+    #|#|#     #|#|.
+    1|2|#  => 1|2|#
+    .|1|#     .|1|#
+"""
+
 from random import SystemRandom
 random = SystemRandom()
 
