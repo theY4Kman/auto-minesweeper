@@ -79,6 +79,7 @@ class AttemptUnoDirector(RandomExpansionDirector):
         # This gives a better chance of being able to use deductive reasoning
         # with groups next turn.
         cardinal_neighbors = set()
+        scores = {}
         cardinal_deltas = (
             (0, -1),
             (1, 0),
@@ -86,15 +87,28 @@ class AttemptUnoDirector(RandomExpansionDirector):
             (-1, 0),
         )
         for cell in revealed:
+            if not cell.number:
+                continue
+
             neighbors = [cell.get_neighbor_at(d_x, d_y)
                          for d_x, d_y in cardinal_deltas]
-            neighbors = filter(None, neighbors)
+            neighbors = [c for c in neighbors if c and c.is_unrevealed()]
             cardinal_neighbors.update(neighbors)
 
-        cardinal_neighbors = [c for c in cardinal_neighbors
-                              if c.is_unrevealed()]
+            all_neighbors = cell.get_neighbors()
+            flagged = [c for c in all_neighbors if c.is_flagged()]
+            unrevealed = [c for c in all_neighbors if c.is_unrevealed()]
+            necessary = cell.number - len(flagged)
+            score = float(necessary) / len(unrevealed) if unrevealed else 0
+
+            for neighbor in neighbors:
+                if score > scores.get(neighbor, -1):
+                    scores[neighbor] = score
+
         if cardinal_neighbors:
-            cell = random.choice(cardinal_neighbors)
+            scored = [(score, cell) for cell, score in scores.iteritems()]
+            scored.sort()
+            _, cell = scored[0]
             cell.click()
             return
 
