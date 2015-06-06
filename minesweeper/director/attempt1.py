@@ -75,5 +75,28 @@ class AttemptUnoDirector(RandomExpansionDirector):
             cell.click()
             return
 
-        # If no good choice found, fall back to random expansion
+        # If no other good choice, expand randomly in a cardinal direction
+        # This gives a better chance of being able to use deductive reasoning
+        # with groups next turn.
+        cardinal_neighbors = set()
+        cardinal_deltas = (
+            (0, -1),
+            (1, 0),
+            (0, 1),
+            (-1, 0),
+        )
+        for cell in revealed:
+            neighbors = [cell.get_neighbor_at(d_x, d_y)
+                         for d_x, d_y in cardinal_deltas]
+            neighbors = filter(None, neighbors)
+            cardinal_neighbors.update(neighbors)
+
+        cardinal_neighbors = [c for c in cardinal_neighbors
+                              if c.is_unrevealed()]
+        if cardinal_neighbors:
+            cell = random.choice(cardinal_neighbors)
+            cell.click()
+            return
+
+        # If no cardinal neighbor found, fall back to random expansion
         super(AttemptUnoDirector, self).act()
