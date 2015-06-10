@@ -1,5 +1,5 @@
 import os
-import sys
+from datetime import datetime
 
 from random import SystemRandom
 random = SystemRandom()
@@ -13,6 +13,17 @@ from minesweeper.director.base import BaseControl, Cell as DirectorCell
 ROOT_DIR = os.path.dirname(__file__)
 IMAGE_DIR = os.path.join(ROOT_DIR, 'images')
 FONT_DIR = os.path.join(ROOT_DIR, 'fonts')
+
+SAVE_DIR = os.path.join(ROOT_DIR, 'saved_games')
+SAVE_WIN_DIR = os.path.join(SAVE_DIR, 'wins')
+SAVE_LOSS_DIR = os.path.join(SAVE_DIR, 'losses')
+
+
+for d in SAVE_WIN_DIR, SAVE_LOSS_DIR:
+    try:
+        os.makedirs(d)
+    except OSError:
+        pass
 
 
 FPS = 120
@@ -127,6 +138,21 @@ class Cell(object):
     is_flagged = redraw_prop('_is_flagged')
     is_revealed = redraw_prop('_is_revealed')
     is_game_over = redraw_prop('_is_game_over')
+
+    def serialize(self):
+        if self.is_mine:
+            if self.is_losing_mine:
+                return '*'
+            elif self.is_flagged:
+                return 'F'
+            else:
+                return 'O'
+        elif self.is_flagged:
+            return 'f'
+        elif self.is_revealed:
+            return '.'
+        else:
+            return '#'
 
     def mark_dirty(self):
         """Mark the cell for drawing next frame"""
@@ -422,7 +448,6 @@ class Game(object):
 
         # Whether a square has been revealed
         self.has_revealed = False
-        self.mousedown_cell = None
 
         self.board = {(i_x, i_y): Cell(self, i_x, i_y,
                                        pygame.Rect(x, y, CELL_PX, CELL_PX))
@@ -430,14 +455,75 @@ class Game(object):
         self.choose_mines()
         self.determine_numbers()
 
+    def serialize(self):
+        """Serialize the board state to a string.
+
+        The output will look like the following:
+
+            ##.......
+            ###O#O#OO
+            ..OO.O.O.
+            ..Ff..*..
+
+        Legend:
+
+            O (letter oh) - mine, unrevealed
+            # (hash) - unrevealed cell, not containing a mine
+            . (period) - revealed cell, not containing a mine
+            F (uppercase F) - flagged cell, containing a mine
+            f (lowercase f) - flagged cell, not containing a mine
+            * (asterisk) - revealed mine (this cell lost the game). The
+                presence of this means the game has been lost.
+        """
+        chars = []
+        last_y = None
+        for i_x, _, i_y, _ in self.grid():
+            if last_y is not None and i_y != last_y:
+                chars.append('\n')
+            cell = self.board[i_x, i_y]
+            chars.append(cell.serialize())
+            last_y = i_y
+        return ''.join(chars)
+
+    def _save(self, fp):
+        """Serialize board state to a file-like object"""
+        fp.write(self.serialize())
+
+    def save(self, path, overwrite=False):
+        if os.path.isfile(path) and not overwrite:
+            raise OSError('%r exists, will not overwrite' % path)
+
+        with open(path, 'w') as fp:
+            self._save(fp)
+
+    def _format_filename(self, index=None, prefix='saved_', suffix='.txt'):
+        date = datetime.now().strftime('%Y-%m-%d_%I-%M')
+        parts = [prefix, date]
+        if index is not None:
+            parts.append('_%s' % index)
+        parts.append(suffix)
+        return ''.join(parts)
+
+    def generate_filename(self, directory=None):
+        path = filename = self._format_filename()
+        if directory and os.path.isdir(directory):
+            index = 1
+            while True:
+                path = os.path.join(directory, filename)
+                if not os.path.exists(path):
+                    break
+                filename = self._format_filename(index=index)
+                index += 1
+        return path
+
     def grid(self):
         w = BOARD_WIDTH * CELL_PX
         h = BOARD_HEIGHT * CELL_PX
 
-        for i_x, x in enumerate(xrange(MARGIN_PX, MARGIN_PX + w, CELL_PX)):
-            for i_y, y in enumerate(xrange(MARGIN_PX + SCOREBOARD_HEIGHT,
-                                           SCOREBOARD_HEIGHT + MARGIN_PX + h,
-                                           CELL_PX)):
+        for i_y, y in enumerate(xrange(MARGIN_PX + SCOREBOARD_HEIGHT,
+                                       SCOREBOARD_HEIGHT + MARGIN_PX + h,
+                                       CELL_PX)):
+            for i_x, x in enumerate(xrange(MARGIN_PX, MARGIN_PX + w, CELL_PX)):
                 yield i_x, x, i_y, y
 
     def choose_mines(self):
@@ -466,6 +552,14 @@ class Game(object):
         self.in_play = False
         for cell in self.board.itervalues():
             cell.is_game_over = True
+
+        self.save(self.generate_filename(SAVE_LOSS_DIR))
+
+    def win(self):
+        self.won = True
+        self.in_play = False
+
+        self.save(self.generate_filename(SAVE_WIN_DIR))
 
     def on_cell_revealed(self, cell):
         self.has_revealed = True
@@ -622,6 +716,5 @@ class Game(object):
 
     def check_winning_state(self):
         if self.did_win():
-            self.won = True
-            self.in_play = False
+            self.win()
         return []
