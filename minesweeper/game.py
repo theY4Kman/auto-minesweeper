@@ -10,7 +10,7 @@ pygame.init()
 from minesweeper.director.base import BaseControl, Cell as DirectorCell
 
 
-ROOT_DIR = os.path.dirname(sys.argv[0])
+ROOT_DIR = os.path.dirname(__file__)
 IMAGE_DIR = os.path.join(ROOT_DIR, 'images')
 FONT_DIR = os.path.join(ROOT_DIR, 'fonts')
 
