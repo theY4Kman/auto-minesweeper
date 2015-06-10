@@ -17,7 +17,7 @@ TODO:
 from random import SystemRandom
 random = SystemRandom()
 
-from minesweeper.director.random import RandomExpansionDirector
+from minesweeper.director.random_director import RandomExpansionDirector
 
 
 class AttemptUnoDirector(RandomExpansionDirector):
