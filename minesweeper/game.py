@@ -512,7 +512,7 @@ class Game(object):
             last_y = i_y
         return ''.join(chars)
 
-    def _save(self, fp):
+    def save_fp(self, fp):
         """Serialize board state to a file-like object"""
         fp.write(self.serialize())
 
@@ -521,7 +521,7 @@ class Game(object):
             raise OSError('%r exists, will not overwrite' % path)
 
         with open(path, 'w') as fp:
-            self._save(fp)
+            self.save_fp(fp)
 
     def _format_filename(self, index=None, prefix='saved_', suffix='.txt'):
         date = datetime.now().strftime('%Y-%m-%d_%I-%M')
@@ -545,8 +545,11 @@ class Game(object):
 
     def load(self, path, unrevealed=False):
         with open(path, 'r') as fp:
-            s = fp.read().strip()
-            self.deserialize(s, unrevealed=unrevealed)
+            self.load_fp(fp, unrevealed=unrevealed)
+
+    def load_fp(self, fp, unrevealed=False):
+        s = fp.read().strip()
+        self.deserialize(s, unrevealed=unrevealed)
 
     def deserialize(self, s, unrevealed=False):
         """Load in the specific board state
