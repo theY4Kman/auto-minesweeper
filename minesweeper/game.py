@@ -390,6 +390,10 @@ class Game(object):
     }
 
     def __init__(self):
+        # Whether to clear all neighbours of the first clicked cell (win7), or
+        # just clear the cell (winXP)
+        self.clear_neighbors_of_first_click = True
+
         # Declarations
         self.director = None
         self.director_control = None
@@ -608,7 +612,7 @@ class Game(object):
 
     def handle_click(self, button, cell):
         if button == 1:
-            if not self.has_revealed and cell.is_mine:
+            if not self.has_revealed:
                 self.reconfigure_board(cell)
             cell.handle_click()
         if button == 2:
@@ -690,26 +694,42 @@ class Game(object):
                 pygame.display.update(dirty_rects)
                 dirty_rects = []
 
-            self.clock.tick(TICK)
+            self.clock.tick(self.tick)
 
         if self.halt:
             pygame.quit()
 
     def reconfigure_board(self, cell):
         """Moves a mine if it's the first cell clicked"""
-        cells = self.board.values()
-        random.shuffle(cells)
-        while cells:
-            possible_cell = cells.pop()
-            if possible_cell is cell:
-                continue
-            if possible_cell.is_mine:
+        if self.clear_neighbors_of_first_click:
+            self._clear_first_click_neighbors(cell)
+        else:
+            self._clear_first_click_cell(cell)
+        self.determine_numbers()
+
+    def _clear_first_click_neighbors(self, cell):
+        self._clear_cells(cell.neighbors() + [cell])
+
+    def _clear_first_click_cell(self, cell):
+        self._clear_cells([cell])
+
+    def _clear_cells(self, cells):
+        all_cells = self.board.values()
+        random.shuffle(all_cells)
+        for cell in cells:
+            if not cell.is_mine:
                 continue
 
-            possible_cell.is_mine = True
-            cell.is_mine = False
-            break
-        self.determine_numbers()
+            while all_cells:
+                possible_cell = all_cells.pop()
+                if possible_cell in cells:
+                    continue
+                if possible_cell.is_mine:
+                    continue
+
+                possible_cell.is_mine = True
+                cell.is_mine = False
+                break
 
     def did_win(self):
         return all(c.is_mine or c.is_revealed for c in self.board.itervalues())
