@@ -21,11 +21,33 @@ from minesweeper.director.random_director import RandomExpansionDirector
 
 
 class AttemptUnoDirector(RandomExpansionDirector):
-    def act(self):
-        cells = self.control.get_cells()
-        numbered = [c for c in cells if c.is_number()]
+    def __init__(self, *args, **kwargs):
+        super(AttemptUnoDirector, self).__init__(*args, **kwargs)
 
-        for cell in numbered:
+        # Cached state for each step
+        self._cells = None
+        self._numbered = None
+        self._revealed = None
+
+    def act(self):
+        self._cells = self.control.get_cells()
+        self._numbered = [c for c in self._cells if c.is_number()]
+        self._revealed = [c for c in self._cells if c.is_revealed()]
+
+        methods = (
+            self.obvious,
+            self.grouping,
+            self.first_click,
+            self.expand_cardinally,
+            self.expand_randomly,
+        )
+
+        for meth in methods:
+            if meth():
+                break
+
+    def obvious(self):
+        for cell in self._numbered:
             neighbors = cell.get_neighbors()
             flagged = [c for c in neighbors if c.is_flagged()]
             unrevealed = [c for c in neighbors if c.is_unrevealed()]
@@ -35,16 +57,17 @@ class AttemptUnoDirector(RandomExpansionDirector):
             if unrevealed and total_neighbours == cell.number:
                 for neighbor in unrevealed:
                     neighbor.right_click()
-                return
+                return True
 
             # If the number of flagged neighbours matches our number and we
             # still have unrevealed neighbours, cascade!
             if unrevealed and len(flagged) == cell.number:
                 cell.middle_click()
-                return
+                return True
 
+    def grouping(self):
         # Deductive reasoning through grouping
-        for cell in numbered:
+        for cell in self._numbered:
             neighbors = cell.get_neighbors()
             numbered_neighbors = [c for c in neighbors if c.is_number()]
 
@@ -57,7 +80,7 @@ class AttemptUnoDirector(RandomExpansionDirector):
                 neighbor_unrevealed = {c for c in neighbor_neighbors
                                        if c.is_unrevealed()}
                 if (unrevealed.issubset(neighbor_unrevealed) and
-                            unrevealed != neighbor_unrevealed):
+                        unrevealed != neighbor_unrevealed):
                     neighbor_flagged = [c for c in neighbor_neighbors
                                         if c.is_flagged()]
                     neighbor_necessary = neighbor.number - len(neighbor_flagged)
@@ -66,16 +89,16 @@ class AttemptUnoDirector(RandomExpansionDirector):
                     if necessary == neighbor_necessary:
                         for cell in unshared:
                             cell.click()
-                        return
+                        return True
                     else:
                         necessary_diff = neighbor_necessary - necessary
                         if necessary_diff == len(unshared):
                             for cell in unshared:
                                 cell.right_click()
-                            return
+                            return True
 
-        revealed = [c for c in cells if c.is_revealed()]
-        if not revealed:
+    def first_click(self):
+        if not self._revealed:
             # For our first turn, choose an edge
             w, h = self.control.get_board_size()
             edges = set()
@@ -89,8 +112,9 @@ class AttemptUnoDirector(RandomExpansionDirector):
             coord = random.choice(edges)
             cell = self.control.get_cell(*coord)
             cell.click()
-            return
+            return True
 
+    def expand_cardinally(self):
         # If no other good choice, expand randomly in a cardinal direction
         # This gives a better chance of being able to use deductive reasoning
         # with groups next turn.
@@ -102,7 +126,7 @@ class AttemptUnoDirector(RandomExpansionDirector):
             (0, 1),
             (-1, 0),
         )
-        for cell in revealed:
+        for cell in self._revealed:
             if not cell.number:
                 continue
 
@@ -126,7 +150,8 @@ class AttemptUnoDirector(RandomExpansionDirector):
             scored.sort()
             _, cell = scored[0]
             cell.click()
-            return
+            return True
 
+    def expand_randomly(self):
         # If no cardinal neighbor found, fall back to random expansion
         super(AttemptUnoDirector, self).act()
