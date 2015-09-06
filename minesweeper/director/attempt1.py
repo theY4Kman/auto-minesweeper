@@ -9,9 +9,9 @@ TODO:
 
  - Grouping deductions requiring thought among several groups:
 
-    #|#|#     #|#|.
+    O|#|O     O|#|F
     1|2|#  => 1|2|#
-    .|1|#     .|1|#
+    .|1|O     .|1|O
 """
 
 from random import SystemRandom
