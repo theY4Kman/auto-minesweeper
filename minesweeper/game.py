@@ -154,6 +154,20 @@ class Cell(object):
         else:
             return '#'
 
+    def deserialize(self, c):
+        if c in '*FO':
+            self.is_mine = True
+            if c == '*':
+                self.is_losing_mine = True
+            elif c == 'F':
+                self.is_flagged = True
+        elif c == 'f':
+            self.is_flagged = True
+        elif c == '.':
+            self.is_revealed = True
+        else:
+            self.is_revealed = False
+
     def mark_dirty(self):
         """Mark the cell for drawing next frame"""
         self.should_redraw = True
@@ -439,6 +453,9 @@ class Game(object):
         pygame.display.set_caption('Minesweeper')
 
     def init_game(self):
+        self.width = BOARD_WIDTH
+        self.height = BOARD_HEIGHT
+
         self.lost = self.won = False
         self.in_play = True
         self.director_act_at = self.frame + DIRECTOR_SKIP_FRAMES
@@ -453,11 +470,14 @@ class Game(object):
         # Whether a square has been revealed
         self.has_revealed = False
 
-        self.board = {(i_x, i_y): Cell(self, i_x, i_y,
-                                       pygame.Rect(x, y, CELL_PX, CELL_PX))
-                      for i_x, x, i_y, y in self.grid()}
+        self.board = self._generate_board()
         self.choose_mines()
         self.determine_numbers()
+
+    def _generate_board(self, c_w=None, c_h=None):
+        return {(i_x, i_y): Cell(self, i_x, i_y,
+                                 pygame.Rect(x, y, CELL_PX, CELL_PX))
+                for i_x, x, i_y, y in self.grid(c_w, c_h)}
 
     def serialize(self):
         """Serialize the board state to a string.
@@ -520,9 +540,53 @@ class Game(object):
                 index += 1
         return path
 
-    def grid(self):
-        w = BOARD_WIDTH * CELL_PX
-        h = BOARD_HEIGHT * CELL_PX
+    def load(self, path, unrevealed=False):
+        with open(path, 'r') as fp:
+            s = fp.read().strip()
+            self.deserialize(s, unrevealed=unrevealed)
+
+    def deserialize(self, s, unrevealed=False):
+        """Load in the specific board state
+
+        :param unrevealed: only load flags; don't reveal or flag any cells
+        """
+        lines = s.split('\n')
+        h = len(lines)
+        w = len(lines[0])
+        assert all(len(l) == w for l in lines)
+
+        self.width = w
+        self.height = h
+
+        self.board = self._generate_board(w, h)
+        for y, row in enumerate(lines):
+            for x, c in enumerate(row):
+                cell = self.board[(x, y)]
+                cell.deserialize(c)
+
+                if unrevealed:
+                    cell.is_revealed = False
+                    cell.is_losing_mine = False
+                    cell.is_flagged = False
+                else:
+                    if cell.is_losing_mine:
+                        self.won = False
+                        self.lost = True
+                        self.in_play = False
+                        self._set_game_over()
+                    if cell.is_revealed:
+                        self.has_revealed = True
+
+        self.determine_numbers()
+
+    def grid(self, c_w=None, c_h=None):
+        c_w = c_w or self.width
+        c_h = c_h or self.height
+        return self._grid(c_w, c_h)
+
+    def _grid(self, c_w, c_h):
+        w = c_w * CELL_PX
+        h = c_h * CELL_PX
 
         for i_y, y in enumerate(xrange(MARGIN_PX + SCOREBOARD_HEIGHT,
                                        SCOREBOARD_HEIGHT + MARGIN_PX + h,
@@ -551,11 +615,14 @@ class Game(object):
         i_x, i_y = int(x) / CELL_PX, int(y) / CELL_PX
         return self.board.get((i_x, i_y))
 
+    def _set_game_over(self):
+        for cell in self.board.itervalues():
+            cell.is_game_over = True
+
     def lose(self):
         self.lost = True
         self.in_play = False
-        for cell in self.board.itervalues():
-            cell.is_game_over = True
+        self._set_game_over()
 
         self.save(self.generate_filename(SAVE_LOSS_DIR))
 
