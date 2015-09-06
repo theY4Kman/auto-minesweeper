@@ -524,7 +524,7 @@ class Game(object):
             self.save_fp(fp)
 
     def _format_filename(self, index=None, prefix='saved_', suffix='.txt'):
-        date = datetime.now().strftime('%Y-%m-%d_%I-%M')
+        date = datetime.now().strftime('%Y-%m-%d_%H-%M')
         parts = [prefix, date]
         if index is not None:
             parts.append('_%s' % index)
