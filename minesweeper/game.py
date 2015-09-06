@@ -412,6 +412,7 @@ class Game(object):
         # Declarations
         self.director = None
         self.director_control = None
+        self.director_skip_frames = None
         self.director_act_at = None
         self.director_cell_redraw = None
 
@@ -459,7 +460,8 @@ class Game(object):
 
         self.lost = self.won = False
         self.in_play = True
-        self.director_act_at = self.frame + DIRECTOR_SKIP_FRAMES
+        self.director_skip_frames = DIRECTOR_SKIP_FRAMES
+        self.director_act_at = self.frame + self.director_skip_frames
         self.director_cell_redraw = []
 
         if self.director_control:
@@ -740,7 +742,7 @@ class Game(object):
                         # Determine next moves
                         self.director_control.reset_cache()
                         self.director.act()
-                        self.director_act_at = self.frame + DIRECTOR_SKIP_FRAMES
+                        self.director_act_at = self.frame + self.director_skip_frames
 
                     director_acted = True
 
