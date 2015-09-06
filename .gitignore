@@ -1,4 +1,5 @@
 *.pyc
 .idea/
 .DS_Store
-saved_games/
+minesweeper/saved_games/wins
+minesweeper/saved_games/losses

@@ -17,9 +17,10 @@ FONT_DIR = os.path.join(ROOT_DIR, 'fonts')
 SAVE_DIR = os.path.join(ROOT_DIR, 'saved_games')
 SAVE_WIN_DIR = os.path.join(SAVE_DIR, 'wins')
 SAVE_LOSS_DIR = os.path.join(SAVE_DIR, 'losses')
+SAVE_SCENARIOS_DIR = os.path.join(SAVE_DIR, 'scenarios')
 
 
-for d in SAVE_WIN_DIR, SAVE_LOSS_DIR:
+for d in SAVE_WIN_DIR, SAVE_LOSS_DIR, SAVE_SCENARIOS_DIR:
     try:
         os.makedirs(d)
     except OSError:
