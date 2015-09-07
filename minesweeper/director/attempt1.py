@@ -30,16 +30,27 @@ class AttemptUnoDirector(RandomExpansionDirector):
         self._cells = None
         self._numbered = None
         self._revealed = None
+        self._last_move = None
 
     def sort_by_last_move(self, cells):
         """Sort cells based on location near the last move"""
-        history = self.control.get_history()
-        if not history:
-            return cells
+        return sorted(cells, key=lambda c: self.dist_to_last_move(c.x, c.y))
 
-        _, (l_x, l_y) = history[-1]
-        dist = lambda x, y: math.sqrt((x - l_x)**2 + (y - l_y)**2)
-        return sorted(cells, key=lambda c: dist(c.x, c.y))
+    def dist_to_last_move(self, x, y):
+        if not self._last_move:
+            return float('Inf')
+
+        _, (l_x, l_y) = self._last_move
+        return math.sqrt((x - l_x)**2 + (y - l_y)**2)
+
+    def exec_moves(self, moves):
+        """Execute moves in the form ('xyz_click', cell)"""
+        for move in moves:
+            self.exec_move(move)
+
+    def exec_move(self, move):
+        attr, cell = move
+        getattr(cell, attr)()
 
     def act(self):
         # Sorting makes the director more visually appealing by having most
@@ -48,17 +59,47 @@ class AttemptUnoDirector(RandomExpansionDirector):
         self._numbered = [c for c in self._cells if c.is_number()]
         self._revealed = [c for c in self._cells if c.is_revealed()]
 
-        methods = (
+        history = self.control.get_history()
+        if history:
+            self._last_move = history[-1]
+
+        confident = (
             self.obvious,
             self.grouping,
             self.first_click,
+        )
+
+        guess = (
             self.expand_cardinally,
             self.expand_randomly,
         )
 
-        for meth in methods:
-            if meth():
-                break
+        move_sets = filter(None, [meth() for meth in confident])
+        best_set = None
+        lowest_set_dist = float('Inf')
+        for move_set in move_sets:
+            lowest_dist = float('Inf')
+            for _, cell in move_set:
+                dist = self.dist_to_last_move(cell.x, cell.y)
+                if dist < lowest_dist:
+                    lowest_dist = dist
+
+            if lowest_dist < lowest_set_dist:
+                lowest_set_dist = lowest_dist
+                best_set = move_set
+
+        if not best_set and move_sets:
+            best_set = random.choice(move_sets)
+
+        if best_set:
+            self.exec_moves(best_set)
+            return
+
+        for meth in guess:
+            moves = meth()
+            if moves:
+                self.exec_moves(moves)
+                return
 
     def obvious(self):
         for cell in self._numbered:
@@ -69,15 +110,13 @@ class AttemptUnoDirector(RandomExpansionDirector):
             # If the number of unrevealed neighbours matches our number, flag!
             total_neighbours = len(flagged) + len(unrevealed)
             if unrevealed and total_neighbours == cell.number:
-                for neighbor in unrevealed:
-                    neighbor.right_click()
-                return True
+                return [('right_click', c) for c in unrevealed]
 
             # If the number of flagged neighbours matches our number and we
             # still have unrevealed neighbours, cascade!
             if unrevealed and len(flagged) == cell.number:
                 cell.middle_click()
-                return True
+                return [('middle_click', cell)]
 
     def grouping(self):
         # Deductive reasoning through grouping
@@ -101,15 +140,11 @@ class AttemptUnoDirector(RandomExpansionDirector):
 
                     unshared = neighbor_unrevealed - unrevealed
                     if necessary == neighbor_necessary:
-                        for cell in unshared:
-                            cell.click()
-                        return True
+                        return [('click', c) for c in unshared]
                     else:
                         necessary_diff = neighbor_necessary - necessary
                         if necessary_diff == len(unshared):
-                            for cell in unshared:
-                                cell.right_click()
-                            return True
+                            return [('right_click', c) for c in unshared]
 
     def first_click(self):
         if not self._revealed:
@@ -125,8 +160,7 @@ class AttemptUnoDirector(RandomExpansionDirector):
             edges = list(edges)
             coord = random.choice(edges)
             cell = self.control.get_cell(*coord)
-            cell.click()
-            return True
+            return [('click', cell)]
 
     def expand_cardinally(self):
         # If no other good choice, expand randomly in a cardinal direction
@@ -163,9 +197,15 @@ class AttemptUnoDirector(RandomExpansionDirector):
             scored = [(score, cell) for cell, score in scores.iteritems()]
             scored.sort()
             _, cell = scored[0]
-            cell.click()
-            return True
+            return [('click', cell)]
 
     def expand_randomly(self):
         # If no cardinal neighbor found, fall back to random expansion
-        super(AttemptUnoDirector, self).act()
+        choices = set()
+        for cell in self._revealed:
+            neighbors = {c for c in cell.get_neighbors() if c.is_unrevealed()}
+            choices.update(neighbors)
+
+        choices = list(choices)
+        selection = random.choice(choices)
+        return [('click', selection)]
