@@ -14,6 +14,8 @@ TODO:
     .|1|O     .|1|O
 """
 
+import math
+
 from random import SystemRandom
 random = SystemRandom()
 
@@ -29,8 +31,20 @@ class AttemptUnoDirector(RandomExpansionDirector):
         self._numbered = None
         self._revealed = None
 
+    def sort_by_last_move(self, cells):
+        """Sort cells based on location near the last move"""
+        history = self.control.get_history()
+        if not history:
+            return cells
+
+        _, (l_x, l_y) = history[-1]
+        dist = lambda x, y: math.sqrt((x - l_x)**2 + (y - l_y)**2)
+        return sorted(cells, key=lambda c: dist(c.x, c.y))
+
     def act(self):
-        self._cells = self.control.get_cells()
+        # Sorting makes the director more visually appealing by having most
+        # moves seem near each other.
+        self._cells = self.sort_by_last_move(self.control.get_cells())
         self._numbered = [c for c in self._cells if c.is_number()]
         self._revealed = [c for c in self._cells if c.is_revealed()]
 

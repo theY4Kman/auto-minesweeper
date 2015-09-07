@@ -7,6 +7,9 @@ from itertools import starmap
 class BaseControl(object):
     """Middleman between directors and the Game"""
 
+    def __init__(self):
+        self._history = []
+
     def click(self, x, y):
         """Click the cell at grid x & y.
 
@@ -15,7 +18,7 @@ class BaseControl(object):
         This may not change the state of the game, depending on the state of
         the cell at x, y.
         """
-        raise NotImplementedError
+        self._history.append(('click', (x, y)))
 
     def right_click(self, x, y):
         """Right-click the cell at grid x & y.
@@ -25,7 +28,7 @@ class BaseControl(object):
         This may not change the state of the game, depending on the state of
         the cell at x, y.
         """
-        raise NotImplementedError
+        self._history.append(('right_click', (x, y)))
 
     def middle_click(self, x, y):
         """Middle-click the cell at grid x & y
@@ -36,7 +39,7 @@ class BaseControl(object):
         This may not change the state of the game, depending on the state of
         the cell at x, y.
         """
-        raise NotImplementedError
+        self._history.append(('middle_click', (x, y)))
 
     def get_cell(self, x, y):
         """Get the Cell at grid x, y coords. Return None if out-of-bounds"""
@@ -52,6 +55,17 @@ class BaseControl(object):
     def get_board_size(self):
         """Return size of grid"""
         raise NotImplementedError
+
+    def get_history(self):
+        """Return the full history of actions
+
+        Returns a list of tuples in the form:
+
+            ('click', (x, y))
+            ('right_click', (x, y))
+            ('middle_click', (x, y))
+        """
+        return self._history
 
     def reset_cache(self):
         pass

@@ -284,6 +284,7 @@ class Cell(object):
 
 class GameControl(BaseControl):
     def __init__(self, game):
+        super(GameControl, self).__init__()
         self._game = game
         self._cells = None
         self._cell_map = None
@@ -348,6 +349,7 @@ class QueuedControl(BaseControl):
         """
         :type control: BaseControl
         """
+        super(QueuedControl, self).__init__()
         self._control = control
         self._queue = []
 
@@ -367,12 +369,15 @@ class QueuedControl(BaseControl):
         return cells
 
     def click(self, x, y):
+        super(QueuedControl, self).click(x, y)
         self._queue.append((1, x, y, lambda: self._control.click(x, y)))
 
     def right_click(self, x, y):
+        super(QueuedControl, self).right_click(x, y)
         self._queue.append((3, x, y, lambda: self._control.right_click(x, y)))
 
     def middle_click(self, x, y):
+        super(QueuedControl, self).middle_click(x, y)
         self._queue.append((2, x, y, lambda: self._control.middle_click(x, y)))
 
     def get_board_size(self):
