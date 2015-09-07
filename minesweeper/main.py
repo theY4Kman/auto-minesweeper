@@ -19,6 +19,7 @@ def main(argv=None):
                         default='attempt1',
                         help='AI director to use (none to disable)')
     parser.add_argument('--director-skip-frames',
+                        type=int,
                         default=1,
                         help='Number of frames to skip between director steps')
 
