@@ -404,7 +404,9 @@ class Game(object):
         3: sprites.right_click,
     }
 
-    def __init__(self):
+    def __init__(self, tick=None):
+        self.tick = tick or TICK
+
         # Whether to clear all neighbours of the first clicked cell (win7), or
         # just clear the cell (winXP)
         self.clear_neighbors_of_first_click = True
