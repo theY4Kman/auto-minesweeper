@@ -440,8 +440,12 @@ class Game(object):
         self.board = None
 
         # Initializations
+        self.init_vars()
         self.init_pygame()
         self.init_game()
+
+    def init_vars(self):
+        self.director_skip_frames = DIRECTOR_SKIP_FRAMES
 
     def init_pygame(self):
         self.frame = 0
@@ -465,9 +469,19 @@ class Game(object):
         self.width = BOARD_WIDTH
         self.height = BOARD_HEIGHT
 
+        self.reset_game_state()
+
+        self.board = self._generate_board()
+        self.choose_mines()
+        self.determine_numbers()
+
+    def reset_game_state(self):
         self.lost = self.won = False
         self.in_play = True
-        self.director_skip_frames = DIRECTOR_SKIP_FRAMES
+
+        # Whether a square has been revealed
+        self.has_revealed = False
+
         self.director_act_at = self.frame + self.director_skip_frames
         self.director_cell_redraw = []
 
@@ -476,13 +490,6 @@ class Game(object):
 
         self.mines_left = MINES
         self._last_mines_left = None
-
-        # Whether a square has been revealed
-        self.has_revealed = False
-
-        self.board = self._generate_board()
-        self.choose_mines()
-        self.determine_numbers()
 
     def _generate_board(self, c_w=None, c_h=None):
         return {(i_x, i_y): Cell(self, i_x, i_y,
@@ -571,6 +578,9 @@ class Game(object):
         self.width = w
         self.height = h
 
+        self.reset_game_state()
+        self.mines_left = 0
+
         self.board = self._generate_board(w, h)
         for y, row in enumerate(lines):
             for x, c in enumerate(row):
@@ -589,6 +599,9 @@ class Game(object):
                         self._set_game_over()
                     if cell.is_revealed:
                         self.has_revealed = True
+
+                if cell.is_mine and not (cell.is_revealed or cell.is_flagged):
+                    self.mines_left += 1
 
         self.determine_numbers()
 
@@ -730,8 +743,7 @@ class Game(object):
                             self.handle_click(event.button, mouseup_cell)
 
                         elif not self.in_play and mouseup_cell is None:
-                            # The margin has been clicked, restart
-                            self.init_game()
+                            self.on_margin_clicked()
 
                     mousedown_cell = None
                     mousedown_button = None
@@ -767,6 +779,7 @@ class Game(object):
                 dirty_rects += self.draw_director_actions()
 
             if self._last_mines_left != self.mines_left:
+                self._last_mines_left = self.mines_left
                 self.draw_score()
                 dirty_rects.append(self.scoreboard_rect)
 
@@ -818,3 +831,6 @@ class Game(object):
         if self.did_win():
             self.win()
         return []
+
+    def on_margin_clicked(self):
+        self.init_game()

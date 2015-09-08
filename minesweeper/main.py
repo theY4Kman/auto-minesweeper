@@ -14,6 +14,10 @@ def main(argv=None):
                         type=bool,
                         default=False,
                         help='Load scenario completely unrevealed')
+    parser.add_argument('-r', '--repeat',
+                        default=False,
+                        action='store_true',
+                        help='Repeat loaded scenario')
     parser.add_argument('-d', '--director',
                         choices=['none', 'attempt1'],
                         default='attempt1',
@@ -33,6 +37,16 @@ def main(argv=None):
         game.set_director(director)
 
     if args.scenario:
-        game.load_fp(args.scenario, unrevealed=args.scenario_unrevealed)
+        # We want to manage opening the file ourselves
+        args.scenario.close()
+
+        def load_scenario():
+            game.load(args.scenario.name, unrevealed=args.scenario_unrevealed)
+        if args.repeat:
+            def on_margin_clicked():
+                game.init_game()
+                load_scenario()
+            game.on_margin_clicked = on_margin_clicked
+        load_scenario()
 
     game.run()
