@@ -26,6 +26,12 @@ def main(argv=None):
                         type=int,
                         default=1,
                         help='Number of frames to skip between director steps')
+    parser.add_argument('-m', '--mode',
+                        choices=['winxp', 'win7'],
+                        default='win7',
+                        help='Which minesweeper mode to emulate '
+                             '(winxp=clear first clicked cell,'
+                             ' win7=clear neighbours of first clicked cell)')
 
     args = parser.parse_args(argv)
 
@@ -48,5 +54,7 @@ def main(argv=None):
                 load_scenario()
             game.on_margin_clicked = on_margin_clicked
         load_scenario()
+
+    game.clear_neighbors_of_first_click = args.mode == 'win7'
 
     game.run()
