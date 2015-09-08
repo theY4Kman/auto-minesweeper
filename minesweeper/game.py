@@ -572,7 +572,16 @@ class Game(object):
 
         :param unrevealed: only load flags; don't reveal or flag any cells
         """
-        lines = s.split('\n')
+        lines = []
+        for line in s.split('\n'):
+            line = line.rstrip()
+
+            # Allow comments and such after a blank line
+            if not line:
+                break
+
+            lines.append(line)
+
         h = len(lines)
         w = len(lines[0])
         assert all(len(l) == w for l in lines)
