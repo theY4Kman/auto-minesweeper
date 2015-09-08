@@ -433,6 +433,7 @@ class Game(object):
         self.lost = None
         self.won = None
         self.in_play = None
+        self._last_in_play = None
         self.mines_left = None
         self._last_mines_left = None
         self.has_revealed = None
@@ -478,6 +479,7 @@ class Game(object):
     def reset_game_state(self):
         self.lost = self.won = False
         self.in_play = True
+        self._last_in_play = None
 
         # Whether a square has been revealed
         self.has_revealed = False
@@ -778,8 +780,10 @@ class Game(object):
                 # Display next actions
                 dirty_rects += self.draw_director_actions()
 
-            if self._last_mines_left != self.mines_left:
+            if (self._last_mines_left != self.mines_left or
+                    self._last_in_play != self.in_play):
                 self._last_mines_left = self.mines_left
+                self._last_in_play = self.in_play
                 self.draw_score()
                 dirty_rects.append(self.scoreboard_rect)
 
