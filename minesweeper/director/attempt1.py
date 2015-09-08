@@ -14,12 +14,16 @@ TODO:
     .|1|O     .|1|O
 """
 
+import logging
 import math
 
 from random import SystemRandom
 random = SystemRandom()
 
 from minesweeper.director.random_director import RandomExpansionDirector
+
+
+logger = logging.getLogger(__name__)
 
 
 class AttemptUnoDirector(RandomExpansionDirector):
@@ -98,6 +102,8 @@ class AttemptUnoDirector(RandomExpansionDirector):
         for meth in guess:
             moves = meth()
             if moves:
+                logger.debug('Executing meth %s moves %r',
+                             meth.__name__, moves)
                 self.exec_moves(moves)
                 return
 
