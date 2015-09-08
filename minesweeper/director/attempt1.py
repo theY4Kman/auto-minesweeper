@@ -18,6 +18,8 @@ import logging
 import math
 
 from random import SystemRandom
+from minesweeper.datastructures import NeighborMap
+
 random = SystemRandom()
 
 from minesweeper.director.random_director import RandomExpansionDirector
@@ -125,10 +127,12 @@ class AttemptUnoDirector(RandomExpansionDirector):
                 return [('middle_click', cell)]
 
     def grouping(self):
+        nm = NeighborMap(self._numbered, lambda n: n.is_unrevealed())
+
         # Deductive reasoning through grouping
         for cell in self._numbered:
             neighbors = cell.get_neighbors()
-            numbered_neighbors = [c for c in neighbors if c.is_number()]
+            numbered_neighbors = nm.subsets(cell) + nm.supersets(cell)
 
             flagged = [c for c in neighbors if c.is_flagged()]
             unrevealed = {c for c in neighbors if c.is_unrevealed()}
