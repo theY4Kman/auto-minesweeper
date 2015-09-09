@@ -1,5 +1,17 @@
+# Python stuff
 *.pyc
+
+# Build artifacts
+*.egg-info/
+/build/
+/dist/
+
+# PyCharm project files
 .idea/
+
+# OSX stuff
 .DS_Store
+
+# Automatically saved finished games
 minesweeper/saved_games/wins
 minesweeper/saved_games/losses

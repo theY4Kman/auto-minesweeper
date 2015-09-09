@@ -5,7 +5,7 @@ from random import SystemRandom
 random = SystemRandom()
 
 import pygame
-pygame.init()
+_pygame_initialized = False
 
 from minesweeper.director.base import BaseControl, Cell as DirectorCell
 
@@ -449,6 +449,11 @@ class Game(object):
         self.director_skip_frames = DIRECTOR_SKIP_FRAMES
 
     def init_pygame(self):
+        global _pygame_initialized
+        if not _pygame_initialized:
+            pygame.init()
+            _pygame_initialized = True
+
         self.frame = 0
         self.halt = False
         self.screen = pygame.display.set_mode([
