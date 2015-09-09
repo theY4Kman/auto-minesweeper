@@ -32,6 +32,10 @@ def main(argv=None):
                         help='Which minesweeper mode to emulate '
                              '(winxp=clear first clicked cell,'
                              ' win7=clear neighbours of first clicked cell)')
+    parser.add_argument('--disable-low-confidence',
+                        default=False,
+                        action='store_true',
+                        help='Disable low-confidence moves by the director')
 
     args = parser.parse_args(argv)
 
@@ -39,7 +43,8 @@ def main(argv=None):
 
     game.director_skip_frames = args.director_skip_frames
     if args.director == 'attempt1':
-        director = AttemptUnoDirector()
+        director = AttemptUnoDirector(
+            disable_low_confidence=args.disable_low_confidence)
         game.set_director(director)
 
     if args.scenario:

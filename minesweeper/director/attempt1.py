@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 class AttemptUnoDirector(RandomExpansionDirector):
     def __init__(self, *args, **kwargs):
+        self.disable_low_confidence = kwargs.pop('disable_low_confidence',
+                                                 False)
+
         super(AttemptUnoDirector, self).__init__(*args, **kwargs)
 
         # Cached state for each step
@@ -101,13 +104,14 @@ class AttemptUnoDirector(RandomExpansionDirector):
             self.exec_moves(best_set)
             return
 
-        for meth in guess:
-            moves = meth()
-            if moves:
-                logger.debug('Executing meth %s moves %r',
-                             meth.__name__, moves)
-                self.exec_moves(moves)
-                return
+        if not self.disable_low_confidence:
+            for meth in guess:
+                moves = meth()
+                if moves:
+                    logger.debug('Executing meth %s moves %r',
+                                 meth.__name__, moves)
+                    self.exec_moves(moves)
+                    return
 
     def obvious(self):
         for cell in self._numbered:
