@@ -18,9 +18,13 @@ Installation
 Screenshots
 ===========
 
-![lose](https://cloud.githubusercontent.com/assets/33840/24569870/4ccdb046-1636-11e7-9e04-1cebb9c21d44.gif)
+Loss
 
-![win](https://cloud.githubusercontent.com/assets/33840/24569871/4cdbf3b8-1636-11e7-8da0-f43f928b325a.gif)
+.. image:: https://cloud.githubusercontent.com/assets/33840/24569870/4ccdb046-1636-11e7-9e04-1cebb9c21d44.gif
+
+Win
+
+.. image:: https://cloud.githubusercontent.com/assets/33840/24569871/4cdbf3b8-1636-11e7-8da0-f43f928b325a.gif
 
 
 Command-line Help
