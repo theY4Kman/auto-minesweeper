@@ -2,6 +2,8 @@ import os
 from datetime import datetime
 
 from random import SystemRandom
+from typing import Set
+
 random = SystemRandom()
 
 import pygame
@@ -73,6 +75,16 @@ class Sprites(object):
         'unrevealed',
     }
 
+    COMPUTED_SPRITES = {
+        'left_click': (255, 0, 0),
+        'middle_click': (0, 255, 0),
+        'right_click': (0, 0, 255),
+
+        'mark1': (255, 195, 25),
+        'mark2': (227, 0, 255),
+        'mark3': (20, 204, 155),
+    }
+
     def __init__(self):
         self._sprites = {}
         for name in self._sprite_names:
@@ -80,13 +92,9 @@ class Sprites(object):
             self._sprites[name] = image
             setattr(self, name, image)
 
-        for name, color in (
-                ('left_click', (255, 0, 0)),
-                ('middle_click', (0, 255, 0)),
-                ('right_click', (0, 0, 255)),
-        ):
+        for name, color in self.COMPUTED_SPRITES.items():
             surface = pygame.Surface((CELL_PX, CELL_PX))
-            surface.set_alpha(128)
+            surface.set_alpha(96)
             surface.fill(color)
             self[name] = surface
 
@@ -112,7 +120,7 @@ def redraw_prop(attr):
 
 
 class Cell(object):
-    def __init__(self, game, i_x, i_y, rect,
+    def __init__(self, game, i_x, i_y, rect: pygame.Rect,
                  is_mine=False, is_flagged=False, is_revealed=False):
         self.game = game
         self.i_x = i_x
@@ -173,8 +181,8 @@ class Cell(object):
         """Mark the cell for drawing next frame"""
         self.should_redraw = True
 
-    def neighbors(self):
-        return filter(None, map(lambda t: self._get_neighbour(*t), [
+    def neighbors(self) -> Set['Cell']:
+        neighbors = map(lambda t: self._get_neighbour(*t), (
             (-1, -1),
             (0, -1),
             (1, -1),
@@ -183,16 +191,17 @@ class Cell(object):
             (0, 1),
             (-1, 1),
             (-1, 0),
-        ]))
+        ))
+        return set(filter(None, neighbors))
 
-    def neighbor_mines(self):
-        return [n for n in self.neighbors() if n.is_mine]
+    def neighbor_mines(self) -> Set['Cell']:
+        return {n for n in self.neighbors() if n.is_mine}
 
-    def neighbor_friendlies(self):
-        return [n for n in self.neighbors() if not n.is_mine]
+    def neighbor_friendlies(self) -> Set['Cell']:
+        return {n for n in self.neighbors() if not n.is_mine}
 
-    def neighbor_flags(self):
-        return [n for n in self.neighbors() if n.is_flagged]
+    def neighbor_flags(self) -> Set['Cell']:
+        return {n for n in self.neighbors() if n.is_flagged}
 
     def _get_neighbour(self, di_x, di_y):
         """dix and diy are grid indexes"""
@@ -320,7 +329,7 @@ class GameControl(BaseControl):
 
     def get_cells(self):
         if self._cells is None:
-            cells = map(self._convert_cell, self._game.board.itervalues())
+            cells = list(map(self._convert_cell, self._game.board.values()))
             cells.sort(key=lambda c: (c.x, c.y))
             self._cells = cells
             self._cell_map = {(c.x, c.y): c for c  in cells}
@@ -337,6 +346,10 @@ class GameControl(BaseControl):
     def middle_click(self, x, y):
         cell = self._get_cell_err(x, y)
         return self._game.handle_click(2, cell)
+
+    def mark(self, x, y, mark_num):
+        cell = self._get_cell_err(x, y)
+        return self._game.handle_click(1000 + mark_num, cell)
 
     def get_board_size(self):
         return BOARD_SIZE
@@ -380,6 +393,10 @@ class QueuedControl(BaseControl):
         super(QueuedControl, self).middle_click(x, y)
         self._queue.append((2, x, y, lambda: self._control.middle_click(x, y)))
 
+    def mark(self, x, y, mark_num):
+        super(QueuedControl, self).mark(x, y, mark_num)
+        self._queue.append((1000 + mark_num, x, y, lambda: None))  # noop
+
     def get_board_size(self):
         return self._control.get_board_size()
 
@@ -407,6 +424,9 @@ class Game(object):
         1: sprites.left_click,
         2: sprites.middle_click,
         3: sprites.right_click,
+        1001: sprites.mark1,
+        1002: sprites.mark2,
+        1003: sprites.mark3,
     }
 
     def __init__(self, tick=None):
@@ -415,6 +435,10 @@ class Game(object):
         # Whether to clear all neighbours of the first clicked cell (win7), or
         # just clear the cell (winXP)
         self.clear_neighbors_of_first_click = True
+
+        # Whether to draw the 0-based column and row indexes around the edges of
+        # the board
+        self.display_axis_indexes = True
 
         # Declarations
         self.director = None
@@ -429,6 +453,7 @@ class Game(object):
         self.clock = None
         self.scoreboard_rect = None
         self.scoreboard_font = None
+        self.axis_index_font: pygame.font.Font = None
 
         self.lost = None
         self.won = None
@@ -440,10 +465,24 @@ class Game(object):
         self.mousedown_cell = None
         self.board = None
 
+        self.deferred = []
+
         # Initializations
         self.init_vars()
         self.init_pygame()
         self.init_game()
+
+    def get_game_margin(self):
+        return MARGIN_PX
+
+    def get_board_margin(self):
+        return self.get_game_margin() + self.get_axis_indexes_height()
+
+    def get_axis_indexes_height(self):
+        if self.display_axis_indexes:
+            return self.axis_index_font.get_height()
+        else:
+            return 0
 
     def init_vars(self):
         self.director_skip_frames = DIRECTOR_SKIP_FRAMES
@@ -452,22 +491,27 @@ class Game(object):
         global _pygame_initialized
         if not _pygame_initialized:
             pygame.init()
+            pygame.font.init()
             _pygame_initialized = True
-
-        self.frame = 0
-        self.halt = False
-        self.screen = pygame.display.set_mode([
-            BOARD_WIDTH * CELL_PX + MARGIN_PX * 2,
-            BOARD_HEIGHT * CELL_PX + MARGIN_PX * 2 + SCOREBOARD_HEIGHT,
-        ])
-        self.screen.fill(BG_COLOR)
-        self.clock = pygame.time.Clock()
-
-        self.scoreboard_rect = pygame.Rect(MARGIN_PX, MARGIN_PX,
-                                           100, SCOREBOARD_HEIGHT)
 
         font_path = os.path.join(FONT_DIR, 'VT323-Regular.ttf')
         self.scoreboard_font = pygame.font.Font(font_path, 36)
+
+        self.axis_index_font = pygame.font.SysFont('Menlo,Andale Mono,Courier New', 9)
+
+        board_margin = self.get_board_margin()
+        self.frame = 0
+        self.halt = False
+        self.screen = pygame.display.set_mode((
+            BOARD_WIDTH * CELL_PX + board_margin * 2,
+            BOARD_HEIGHT * CELL_PX + board_margin * 2 + SCOREBOARD_HEIGHT,
+        ))
+        self.screen.fill(BG_COLOR)
+        self.clock = pygame.time.Clock()
+
+        game_margin = self.get_game_margin()
+        self.scoreboard_rect = pygame.Rect(game_margin, game_margin,
+                                           100, SCOREBOARD_HEIGHT)
 
         pygame.display.set_caption('Minesweeper')
 
@@ -537,12 +581,16 @@ class Game(object):
         """Serialize board state to a file-like object"""
         fp.write(self.serialize())
 
-    def save(self, path, overwrite=False):
+    def save(self, path, overwrite=False, screenshot=True):
         if os.path.isfile(path) and not overwrite:
             raise OSError('%r exists, will not overwrite' % path)
 
         with open(path, 'w') as fp:
             self.save_fp(fp)
+
+        if screenshot:
+            do_screenshot_save = lambda: pygame.image.save(self.screen, path + '.jpg')
+            self.defer(do_screenshot_save)
 
     def _format_filename(self, index=None, prefix='saved_', suffix='.txt'):
         date = datetime.now().strftime('%Y-%m-%d_%H-%M')
@@ -630,14 +678,15 @@ class Game(object):
         w = c_w * CELL_PX
         h = c_h * CELL_PX
 
-        for i_y, y in enumerate(xrange(MARGIN_PX + SCOREBOARD_HEIGHT,
-                                       SCOREBOARD_HEIGHT + MARGIN_PX + h,
-                                       CELL_PX)):
-            for i_x, x in enumerate(xrange(MARGIN_PX, MARGIN_PX + w, CELL_PX)):
+        margin = self.get_board_margin()
+        for i_y, y in enumerate(range(margin + SCOREBOARD_HEIGHT,
+                                      SCOREBOARD_HEIGHT + margin + h,
+                                      CELL_PX)):
+            for i_x, x in enumerate(range(margin, margin + w, CELL_PX)):
                 yield i_x, x, i_y, y
 
     def choose_mines(self):
-        possibilities = self.board.values()
+        possibilities = list(self.board.values())
         random.shuffle(possibilities)
         mines = possibilities[:MINES]
         for cell in mines:
@@ -649,16 +698,17 @@ class Game(object):
         self.director.set_control(self.director_control)
 
     def determine_numbers(self):
-        for cell in self.board.itervalues():
+        for cell in self.board.values():
             cell.determine_number()
 
     def get_cell_under_mouse(self, x, y):
-        x, y = x - MARGIN_PX, y - MARGIN_PX - SCOREBOARD_HEIGHT
+        margin = self.get_board_margin()
+        x, y = x - margin, y - margin - SCOREBOARD_HEIGHT
         i_x, i_y = int(x) / CELL_PX, int(y) / CELL_PX
         return self.board.get((i_x, i_y))
 
     def _set_game_over(self):
-        for cell in self.board.itervalues():
+        for cell in self.board.values():
             cell.is_game_over = True
 
     def lose(self):
@@ -702,7 +752,7 @@ class Game(object):
 
     def draw_director_actions(self):
         dirty = []
-        for button, x, y in self.director_control.get_actions():
+        for button, x, y in self.last_director_actions:
             cell = self.board.get((x, y))
             if cell:
                 surface = self.director_buttons[button]
@@ -714,6 +764,33 @@ class Game(object):
                 # change state (like a number)
                 self.director_cell_redraw.append(cell)
         return dirty
+
+    def draw_axis_indexes(self):
+        """Draw numbers denoting indexes of rows and columns"""
+        top_left_cell: Cell = self.board[0, 0]
+        left_x = top_left_cell.rect.x
+        top_y = top_left_cell.rect.y
+
+        bottom_right_cell: Cell = self.board[self.width - 1, self.height - 1]
+        right_x = bottom_right_cell.rect.x + bottom_right_cell.rect.width
+        bottom_y = bottom_right_cell.rect.y + bottom_right_cell.rect.height
+
+        # A little offset makes things look peachy
+        col_x_offset = 5
+
+        # Draw column indexes
+        for i, x in zip(range(self.width),
+                        range(0, self.width * CELL_PX, CELL_PX)):
+            surface = self.axis_index_font.render(str(i), False, (0, 0, 0))
+            self.screen.blit(surface, (left_x + x + col_x_offset, top_y - 10))
+            self.screen.blit(surface, (left_x + x + col_x_offset, bottom_y))
+
+        # Draw row indexes
+        for i, y in zip(range(self.height),
+                        range(0, self.height * CELL_PX, CELL_PX)):
+            surface = self.axis_index_font.render(str(i), False, (0, 0, 0))
+            self.screen.blit(surface, (left_x - 14, top_y + y + 3))
+            self.screen.blit(surface, (right_x + 5, top_y + y + 3))
 
     def redraw_cells(self, cells):
         for cell in cells:
@@ -729,8 +806,14 @@ class Game(object):
         elif button == 3:
             cell.handle_right_click()
 
+    def defer(self, action, after=1):
+        """Perform an action at the end of the next game frame"""
+        self.deferred.append((self.frame + after, action))
+
     def run(self):
         self.halt = False
+        if self.display_axis_indexes:
+            self.draw_axis_indexes()
         self.mainloop()
 
     def mainloop(self):
@@ -773,6 +856,7 @@ class Game(object):
                     self.director_cell_redraw = []
 
                     # Perform queued actions
+                    self.last_director_actions = tuple(self.director_control.get_actions())
                     self.director_control.exec_queue()
                     dirty_rects += self.check_winning_state()
 
@@ -784,12 +868,18 @@ class Game(object):
 
                     director_acted = True
 
-            for cell in self.board.itervalues():
+            for cell in self.board.values():
                 if cell.draw():
                     dirty_rects.append(cell)
 
-            if director_acted:
+            # If we're not in play, we draw the director's last actions, to aid
+            # in debugging losses.
+            if director_acted or (not self.in_play and self.last_director_actions):
                 self.redraw_cells(director_redraw_cells)
+
+                if not director_acted:
+                    self.redraw_cells(self.board[x, y]
+                                      for _, x, y in self.last_director_actions)
 
                 # Display next actions
                 dirty_rects += self.draw_director_actions()
@@ -807,6 +897,16 @@ class Game(object):
 
             self.clock.tick(self.tick)
 
+            if self.deferred:
+                candidates = self.deferred
+                self.deferred = []
+
+                for run_at_frame, action in candidates:
+                    if self.frame >= run_at_frame:
+                        action()
+                    else:
+                        self.deferred.append((run_at_frame, action))
+
         if self.halt:
             pygame.quit()
 
@@ -819,14 +919,15 @@ class Game(object):
         self.determine_numbers()
 
     def _clear_first_click_neighbors(self, cell):
-        self._clear_cells(cell.neighbors() + [cell])
+        self._clear_cells(cell.neighbors() | {cell})
 
     def _clear_first_click_cell(self, cell):
-        self._clear_cells([cell])
+        self._clear_cells({cell})
 
     def _clear_cells(self, cells):
-        all_cells = self.board.values()
+        all_cells = list(self.board.values())
         random.shuffle(all_cells)
+
         for cell in cells:
             if not cell.is_mine:
                 continue
@@ -843,7 +944,7 @@ class Game(object):
                 break
 
     def did_win(self):
-        return all(c.is_mine or c.is_revealed for c in self.board.itervalues())
+        return all(c.is_mine or c.is_revealed for c in self.board.values())
 
     def check_winning_state(self):
         if self.did_win():

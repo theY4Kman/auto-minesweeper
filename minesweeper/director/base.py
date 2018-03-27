@@ -2,6 +2,9 @@
 A director controls the game, seeing only what a player might see.
 """
 from itertools import starmap
+from typing import Set
+
+from minesweeper.util import apply_method_filter
 
 
 class BaseControl(object):
@@ -40,6 +43,15 @@ class BaseControl(object):
         the cell at x, y.
         """
         self._history.append(('middle_click', (x, y)))
+
+    def mark(self, x, y, mark_num):
+        """Mark a cell with an arbitrary color, for visualization
+
+        This does not change the state of the game at all – it's purely to aid
+        debugging.
+        """
+        # TODO: handle validation of mark_num
+        self._history.append((f'mark{mark_num}', (x, y)))
 
     def get_cell(self, x, y):
         """Get the Cell at grid x, y coords. Return None if out-of-bounds"""
@@ -91,6 +103,25 @@ class Cell(object):
         self.y = y
         self.type = type_
 
+    def __str__(self):
+        return 'Cell(x={x}, y={y}, type={type})'.format(
+            x=self.x,
+            y=self.y,
+            type=self.type,
+            self=self,
+        )
+
+    def __repr__(self):
+        return '<{self}>'.format(self=self)
+
+    def get_type_display(self):
+        names = {
+            self.TYPE_UNREVEALED: 'unrevealed',
+            self.TYPE_FLAG: 'flag',
+        }
+
+        return names.get(self.type) or str(self.type)
+
     @property
     def number(self):
         return self.type if self.is_number() else None
@@ -120,14 +151,32 @@ class Cell(object):
     def middle_click(self):
         return self._control.middle_click(self.x, self.y)
 
+    def mark1(self):
+        return self._control.mark(self.x, self.y, 1)
+
+    def mark2(self):
+        return self._control.mark(self.x, self.y, 2)
+
+    def mark3(self):
+        return self._control.mark(self.x, self.y, 3)
+
     def get_neighbor_at(self, d_x, d_y):
         return self._control.get_cell(self.x + d_x, self.y + d_y)
 
-    def get_neighbors(self):
+    def _get_neighbours(self, vectors, **filters):
         """
-        :rtype: list of Cell
+        :rtype: set of Cell
         """
-        all_neighbors = starmap(self.get_neighbor_at, (
+        neighbors = starmap(self.get_neighbor_at, vectors)
+        neighbors = filter(None, neighbors)
+        neighbors = apply_method_filter(neighbors, **filters)
+        return set(neighbors)
+
+    def get_neighbors(self, **filters) -> Set['Cell']:
+        """
+        :rtype: set of Cell
+        """
+        return self._get_neighbours((
             (-1, -1),
             (0, -1),
             (1, -1),
@@ -136,8 +185,22 @@ class Cell(object):
             (0, 1),
             (-1, 1),
             (-1, 0),
-        ))
-        return filter(None, all_neighbors)
+        ), **filters)
+
+    def get_cardinal_neighbors(self, **filters):
+        """
+        :rtype: set of Cell
+        """
+        return self._get_neighbours((
+            (0, -1),
+            (1, 0),
+            (0, 1),
+            (-1, 0),
+        ), **filters)
+
+    @property
+    def num_flags_left(self):
+        return self.number - len(self.get_neighbors(is_flagged=True))
 
 
 class Director(object):

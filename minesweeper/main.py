@@ -1,4 +1,5 @@
 import argparse
+import logging
 
 from minesweeper import Game, AttemptUnoDirector
 
@@ -18,6 +19,7 @@ def main(argv=None):
                         default=False,
                         action='store_true',
                         help='Repeat loaded scenario')
+
     parser.add_argument('-d', '--director',
                         choices=['none', 'attempt1'],
                         default='attempt1',
@@ -26,18 +28,25 @@ def main(argv=None):
                         type=int,
                         default=1,
                         help='Number of frames to skip between director steps')
+
     parser.add_argument('-m', '--mode',
                         choices=['winxp', 'win7'],
                         default='win7',
                         help='Which minesweeper mode to emulate '
                              '(winxp=clear first clicked cell,'
                              ' win7=clear neighbours of first clicked cell)')
+
     parser.add_argument('--disable-low-confidence',
                         default=False,
                         action='store_true',
                         help='Disable low-confidence moves by the director')
 
+    parser.add_argument("-v", "--verbose", help="increase output verbosity",
+                        action="store_true")
+
     args = parser.parse_args(argv)
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
 
     game = Game()
 
