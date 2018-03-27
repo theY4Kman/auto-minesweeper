@@ -1,5 +1,5 @@
-Minesweeper Hints
------------------
+Auto-Minesweeper
+----------------
 
 A minesweeper clone with an interface for AI directors.
 
