@@ -54,7 +54,7 @@ MARGIN_PX = 10
 BG_COLOR = (220, 220, 220)
 
 # Number of frames to skip in between director actions
-DIRECTOR_SKIP_FRAMES = 1
+DIRECTOR_SKIP_FRAMES = 0
 
 
 class Sprites(object):

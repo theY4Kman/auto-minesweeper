@@ -42,18 +42,70 @@ class AttemptUnoDirector(RandomExpansionDirector):
         self._cells: List[Cell] = None
         self._numbered: List[Cell] = None
         self._revealed: List[Cell] = None
-        self._last_move = None
+        self.history = None
 
     def sort_by_last_move(self, cells):
-        """Sort cells based on location near the last move"""
-        return sorted(cells, key=lambda c: self.dist_to_last_move(c.x, c.y))
+        """Sort cells based on location near the last moves"""
+        return sorted(cells, key=lambda c: self.avg_dist_to_last_moves(c.x, c.y, num_moves=3))
+
+    def sort_by_momentum_bias(self, cells):
+        """Sort cells based on projected next location using average velocity"""
+        next_x, next_y = self.projected_move_location(num_moves=3)
+        return sorted(cells, key=lambda c: self.dist_between_cell_and_point(c, next_x, next_y))
 
     def dist_to_last_move(self, x, y):
-        if not self._last_move:
-            return float('Inf')
+        return next(self.dist_to_last_moves(x, y, num_moves=1))
 
-        _, (l_x, l_y) = self._last_move
-        return math.sqrt((x - l_x)**2 + (y - l_y)**2)
+    def dist_to_last_moves(self, x, y, num_moves):
+        if self.history:
+            for _, (l_x, l_y) in self.history[:num_moves]:
+                yield math.sqrt((x - l_x)**2 + (y - l_y)**2)
+        else:
+            yield float('Inf')
+
+    def avg_dist_to_last_moves(self, x, y, num_moves):
+        dist_to_last_moves = tuple(self.dist_to_last_moves(x, y, num_moves=num_moves))
+        return sum(dist_to_last_moves) / len(dist_to_last_moves)
+
+    def dist_between_last_moves(self, num_moves):
+        if self.history[-2:-1]:
+            _, (last_x, last_y) = self.history[-1]
+            for _, (x, y) in self.history[-(num_moves + 1):]:
+                yield self.dist_between_points(last_x, last_y, x, y)
+                last_x, last_y = x, y
+        else:
+            yield float('Inf')
+
+    def slope_to_last_move(self):
+        """Return x,y distance to last move"""
+        if self.history[-2:-1]:
+            _, (a_x, a_y) = self.history[-2]
+            _, (b_x, b_y) = self.history[-1]
+            return a_x - b_x, a_y - b_y
+        else:
+            return float('Inf'), float('Inf')
+
+    def dist_between_points(self, a_x, a_y, b_x, b_y):
+        return math.sqrt((a_x - b_x)**2 + (a_y - b_y)**2)
+
+    def dist_between_cell_and_point(self, cell, x, y):
+        return self.dist_between_points(cell.x, cell.y, x, y)
+
+    def projected_move_location(self, num_moves):
+        """Projected location of next move using avg velocity of last moves"""
+        if self.history:
+            dist_between_last_moves = tuple(self.dist_between_last_moves(num_moves))
+            avg_velocity = sum(dist_between_last_moves) / len(dist_between_last_moves)
+            slope_x, slope_y = self.slope_to_last_move()
+            unit_x, unit_y = slope_x / avg_velocity, slope_y / avg_velocity
+            _, (last_x, last_y) = self.history[-1]
+            next_move = last_x + unit_x, last_y + unit_y
+            logger.debug('Projected next move at %s using avg velocity %s '
+                         '(normalized to %s) from last move %s',
+                         next_move, avg_velocity, (unit_x, unit_y), (last_x, last_y))
+            return next_move
+        else:
+            return float('Inf'), float('Inf')
 
     def exec_moves(self, moves):
         """Execute moves in the form ('xyz_click', cell)"""
@@ -89,9 +141,10 @@ class AttemptUnoDirector(RandomExpansionDirector):
         # Find the planner with the closest move to the last cell acted upon
         closest_plan, closest_planner = None, None
         lowest_dist = float('Inf')
+        projected_next_move = self.projected_move_location(num_moves=3)
         for planner, plan in plans.items():
             for action, cell in plan:
-                dist = self.dist_to_last_move(cell.x, cell.y)
+                dist = self.dist_between_cell_and_point(cell, *projected_next_move)
                 if dist < lowest_dist:
                     lowest_dist = dist
                     closest_plan = plan
@@ -118,13 +171,13 @@ class AttemptUnoDirector(RandomExpansionDirector):
     def act(self):
         # Sorting makes the director more visually appealing by having most
         # moves seem near each other.
-        self._cells = self.sort_by_last_move(self.control.get_cells())
+        self._cells = self.sort_by_momentum_bias(self.control.get_cells())
         self._numbered = [c for c in self._cells if c.is_number()]
         self._revealed = [c for c in self._cells if c.is_revealed()]
 
         history = self.control.get_history()
         if history:
-            self._last_move = history[-1]
+            self.history = history
 
         moves = self.get_next_moves()
         if moves:
