@@ -79,6 +79,10 @@ class BaseControl(object):
         """
         return self._history
 
+    def get_mines_left(self):
+        """Return the number of unflagged mines left on the board"""
+        raise NotImplementedError
+
     def reset_cache(self):
         pass
 

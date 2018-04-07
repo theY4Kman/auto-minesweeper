@@ -354,6 +354,9 @@ class GameControl(BaseControl):
     def get_board_size(self):
         return BOARD_SIZE
 
+    def get_mines_left(self):
+        return self._game.mines_left
+
 
 class QueuedControl(BaseControl):
     """Queues actions to be performed later, allows marking of actions"""
@@ -399,6 +402,9 @@ class QueuedControl(BaseControl):
 
     def get_board_size(self):
         return self._control.get_board_size()
+
+    def get_mines_left(self):
+        return self._control.get_mines_left()
 
     def exec_queue(self):
         queue = self._queue[::-1]
@@ -535,6 +541,7 @@ class Game(object):
 
         self.director_act_at = self.frame + self.director_skip_frames
         self.director_cell_redraw = []
+        self.last_director_actions = []
 
         if self.director_control:
             self.director_control.clear_queue()

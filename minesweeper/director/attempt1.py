@@ -16,6 +16,8 @@ TODO:
 
 import logging
 import math
+import operator
+from functools import reduce
 
 from random import SystemRandom
 from typing import List
@@ -122,6 +124,7 @@ class AttemptUnoDirector(RandomExpansionDirector):
             self.immediate_grouping,
             self.indirect_grouping,
             self.first_click,
+            self.endgame_insight,
         )
 
         guess_planners = (
@@ -277,6 +280,9 @@ class AttemptUnoDirector(RandomExpansionDirector):
 
         for cell in self._numbered:
             cell_needs = cell.num_flags_left
+            if not cell_needs:
+                continue
+
             cell_unrevealed = cell.get_neighbors(is_unrevealed=True)
 
             neighbors = unrevealed_graph.supersets_of(cell)
@@ -345,6 +351,15 @@ class AttemptUnoDirector(RandomExpansionDirector):
             coord = random.choice(edges)
             cell = self.control.get_cell(*coord)
             return [('click', cell)]
+
+    def endgame_insight(self):
+        """Inference of last flag if only one mine is left"""
+        if self.control.get_mines_left() == 1:
+            in_play_numbered = [c for c in self._numbered if c.num_flags_left]
+            in_play_unrevealed = [c.get_neighbors(is_unrevealed=True)
+                                  for c in in_play_numbered]
+            shared = reduce(operator.and_, in_play_unrevealed)
+            return [('right_click', c) for c in shared]
 
     def expand_cardinally(self):
         # If no other good choice, expand randomly in a cardinal direction
