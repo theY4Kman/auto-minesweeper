@@ -96,12 +96,17 @@ class AttemptUnoDirector(RandomExpansionDirector):
     def projected_move_location(self, num_moves):
         """Projected location of next move using avg velocity of last moves"""
         if self.history:
+            _, (last_x, last_y) = self.history[-1]
+
             dist_between_last_moves = tuple(self.dist_between_last_moves(num_moves))
             avg_velocity = sum(dist_between_last_moves) / len(dist_between_last_moves)
+            if avg_velocity == 0:
+                return last_x, last_y
+
             slope_x, slope_y = self.slope_to_last_move()
             unit_x, unit_y = slope_x / avg_velocity, slope_y / avg_velocity
-            _, (last_x, last_y) = self.history[-1]
             next_move = last_x + unit_x, last_y + unit_y
+
             logger.debug('Projected next move at %s using avg velocity %s '
                          '(normalized to %s) from last move %s',
                          next_move, avg_velocity, (unit_x, unit_y), (last_x, last_y))
@@ -117,6 +122,18 @@ class AttemptUnoDirector(RandomExpansionDirector):
     def exec_move(self, move):
         attr, cell = move
         getattr(cell, attr)()
+
+    def choose_best_cell(self, unrevealed_cells):
+        """Pick the most appealing cell to reveal, all confidence being equal"""
+        lowest_dist = float('Inf')
+        best_cell = None
+        projected_next_move = self.projected_move_location(num_moves=3)
+        for cell in unrevealed_cells:
+            dist = self.dist_between_cell_and_point(cell, *projected_next_move)
+            if dist < lowest_dist:
+                lowest_dist = dist
+                best_cell = cell
+        return best_cell, lowest_dist
 
     def get_next_moves(self):
         confident_planners = (
@@ -144,14 +161,12 @@ class AttemptUnoDirector(RandomExpansionDirector):
         # Find the planner with the closest move to the last cell acted upon
         closest_plan, closest_planner = None, None
         lowest_dist = float('Inf')
-        projected_next_move = self.projected_move_location(num_moves=3)
         for planner, plan in plans.items():
-            for action, cell in plan:
-                dist = self.dist_between_cell_and_point(cell, *projected_next_move)
-                if dist < lowest_dist:
-                    lowest_dist = dist
-                    closest_plan = plan
-                    closest_planner = planner
+            best_cell, dist = self.choose_best_cell(cell for _, cell in plan)
+            if dist < lowest_dist:
+                lowest_dist = dist
+                closest_plan = plan
+                closest_planner = planner
 
         if closest_plan:
             logger.info('Chose plan of %s (distance of %f to last cell): %r',
@@ -353,13 +368,18 @@ class AttemptUnoDirector(RandomExpansionDirector):
             return [('click', cell)]
 
     def endgame_insight(self):
-        """Inference of last flag if only one mine is left"""
-        if self.control.get_mines_left() == 1:
-            in_play_numbered = [c for c in self._numbered if c.num_flags_left]
-            in_play_unrevealed = [c.get_neighbors(is_unrevealed=True)
-                                  for c in in_play_numbered]
-            shared = reduce(operator.and_, in_play_unrevealed)
+        """Inference of final action deduced from number of mines left"""
+        in_play_numbered = [c for c in self._numbered if c.num_flags_left]
+        in_play_unrevealed = [c.get_neighbors(is_unrevealed=True)
+                              for c in in_play_numbered]
+        shared = reduce(operator.and_, in_play_unrevealed, set())
+
+        total_unrevealed = sum(1 for c in self._cells if c.is_unrevealed())
+        num_mines_left = self.control.get_mines_left()
+        if num_mines_left == len(shared):
             return [('right_click', c) for c in shared]
+        elif total_unrevealed - len(shared) == num_mines_left:
+            return [('click', c) for c in shared]
 
     def expand_cardinally(self):
         # If no other good choice, expand randomly in a cardinal direction

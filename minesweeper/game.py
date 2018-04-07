@@ -728,6 +728,7 @@ class Game(object):
     def win(self):
         self.won = True
         self.in_play = False
+        self._set_game_over()
 
         self.save(self.generate_filename(SAVE_WIN_DIR))
 
@@ -954,7 +955,7 @@ class Game(object):
         return all(c.is_mine or c.is_revealed for c in self.board.values())
 
     def check_winning_state(self):
-        if self.did_win():
+        if self.in_play and self.did_win():
             self.win()
         return []
 
