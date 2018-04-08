@@ -24,11 +24,9 @@ from typing import List
 
 from minesweeper.datastructures import NeighborGraph
 from minesweeper.director.base import Cell
-
-random = SystemRandom()
-
 from minesweeper.director.random_director import RandomExpansionDirector
 
+random = SystemRandom()
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +102,17 @@ class AttemptUnoDirector(RandomExpansionDirector):
                 return last_x, last_y
 
             slope_x, slope_y = self.slope_to_last_move()
-            unit_x, unit_y = slope_x / avg_velocity, slope_y / avg_velocity
-            next_move = last_x + unit_x, last_y + unit_y
+            last_dist = dist_between_last_moves[0] or 1
+            unit_x, unit_y = slope_x / last_dist, slope_y / last_dist
+            next_slope_x, next_slope_y = unit_x * avg_velocity, unit_y * avg_velocity
+            next_move = last_x + next_slope_x, last_y + next_slope_y
 
-            logger.debug('Projected next move at %s using avg velocity %s '
-                         '(normalized to %s) from last move %s',
-                         next_move, avg_velocity, (unit_x, unit_y), (last_x, last_y))
+            logger.debug('Projected next move at %s from %s, '
+                         'with slope %s calculated using avg velocity %s '
+                         'applied to last slope %s normalized to %s',
+                         next_move, (last_x, last_y),
+                         (next_slope_x, next_slope_y), avg_velocity,
+                         (slope_x, slope_y), (unit_x, unit_y))
             return next_move
         else:
             return float('Inf'), float('Inf')
@@ -180,11 +183,16 @@ class AttemptUnoDirector(RandomExpansionDirector):
             return random_plan
 
         elif not self.disable_low_confidence:
-            for planner in guess_planners:
-                plan = planner()
-                if plan:
-                    logger.info('Chose guess plan of %s: %r', planner, plan)
-                    return plan
+            for guesser in guess_planners:
+                possible_moves = guesser()
+                # XXX: this assumes guessers return not plans, but lists of
+                #      possible single-click actions
+                assert all(action == 'click' for action, cell in possible_moves)
+
+                if possible_moves:
+                    best_cell, _ = self.choose_best_cell(cell for action, cell in possible_moves)
+                    logger.info('Chose to click %s using guess planner %s', best_cell, guesser)
+                    return [('click', best_cell)]
 
     def act(self):
         # Sorting makes the director more visually appealing by having most
@@ -387,16 +395,13 @@ class AttemptUnoDirector(RandomExpansionDirector):
         # with groups next turn.
         cardinal_neighbors = set()
         highest_chances = {}
-        for cell in self._revealed:
-            if not cell.number:
-                continue
-
+        for cell in self._numbered:
             neighbors = cell.get_cardinal_neighbors(is_unrevealed=True)
             cardinal_neighbors.update(neighbors)
 
             unrevealed = cell.get_neighbors(is_unrevealed=True)
             necessary = cell.num_flags_left
-            highest_chance = float(necessary) / len(unrevealed) if unrevealed else 0
+            highest_chance = necessary / len(unrevealed) if unrevealed else 0
 
             for neighbor in neighbors:
                 if highest_chance > highest_chances.get(neighbor, -1):
@@ -404,14 +409,16 @@ class AttemptUnoDirector(RandomExpansionDirector):
 
         if cardinal_neighbors:
             scored = [(score, cell) for cell, score in highest_chances.items()]
-            scored.sort(key=lambda t: t[0])  # sort by highest chance
-            score, cell = scored[0]
-            logger.debug('Expand cardinally chose %s with score %.3f. Next '
-                         'three choices: %s',
-                         cell, score,
-                         ', '.join('%s (%.2f)' % (score, cell)
-                                   for cell, score in scored[1:4]))
-            return [('click', cell)]
+            scored.sort(key=lambda t: t[0])  # sort by chance, ascending
+            high_score, _ = scored[0]
+            contenders = {
+                c
+                for c, score in highest_chances.items()
+                if score >= high_score
+            }
+            logger.debug('Expand cardinally offered choices with score %.3f: %s',
+                         high_score, contenders)
+            return [('click', cell) for cell in contenders]
 
     def expand_randomly(self):
         # If no cardinal neighbor found, fall back to random expansion
