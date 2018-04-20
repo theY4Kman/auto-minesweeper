@@ -1,8 +1,9 @@
 """
 A director controls the game, seeing only what a player might see.
 """
+import math
 from itertools import starmap
-from typing import Set
+from typing import Set, Iterable
 
 from minesweeper.util import apply_method_filter
 
@@ -111,7 +112,7 @@ class Cell(object):
         return 'Cell(x={x}, y={y}, type={type})'.format(
             x=self.x,
             y=self.y,
-            type=self.type,
+            type=self.get_type_display(),
             self=self,
         )
 
@@ -146,6 +147,13 @@ class Cell(object):
     def is_revealed(self):
         return not self.is_unrevealed()
 
+    def is_on_border(self):
+        width, height = self._control.get_board_size()
+        return (
+            (self.x == 0 or self.x == width -1) or
+            (self.y == 0 or self.y == height - 1)
+        )
+
     def click(self):
         return self._control.click(self.x, self.y)
 
@@ -176,11 +184,8 @@ class Cell(object):
         neighbors = apply_method_filter(neighbors, **filters)
         return set(neighbors)
 
-    def get_neighbors(self, **filters) -> Set['Cell']:
-        """
-        :rtype: set of Cell
-        """
-        return self._get_neighbours((
+    def get_neighbor_deltas(self):
+        return (
             (-1, -1),
             (0, -1),
             (1, -1),
@@ -189,18 +194,77 @@ class Cell(object):
             (0, 1),
             (-1, 1),
             (-1, 0),
-        ), **filters)
+        )
 
-    def get_cardinal_neighbors(self, **filters):
-        """
-        :rtype: set of Cell
-        """
-        return self._get_neighbours((
+    def get_cardinal_neighbor_deltas(self):
+        return (
             (0, -1),
             (1, 0),
             (0, 1),
             (-1, 0),
-        ), **filters)
+        )
+
+    def get_neighbors(self, **filters) -> Set['Cell']:
+        return self._get_neighbours(self.get_neighbor_deltas(), **filters)
+
+    def get_cardinal_neighbors(self, **filters) -> Set['Cell']:
+        return self._get_neighbours(self.get_cardinal_neighbor_deltas(), **filters)
+
+    def get_neighbor_across_from(self, cell: 'Cell') -> 'Cell':
+        d_x, d_y = self.x - cell.x, self.y - cell.y
+        if (d_x, d_y) in self.get_neighbor_deltas():
+            return self.get_neighbor_at(d_x, d_y)
+
+    def get_cardinal_neighbor_across_from(self, cell: 'Cell') -> 'Cell':
+        d_x, d_y = self.x - cell.x, self.y - cell.y
+        if (d_x, d_y) in self.get_cardinal_neighbor_deltas():
+            return self.get_neighbor_at(d_x, d_y)
+
+    def get_perpendicular_neighbors_from(self, cell: 'Cell') -> Iterable['Cell']:
+        if self.x != cell.x and self.y != cell.y:
+            return ()
+
+        deltas = ()  # appeasing the type checker
+        d_x, d_y = self.x - cell.x, self.y - cell.y
+
+        if d_x:
+            d_x /= d_x
+            deltas = (
+                (d_x, 1),
+                (d_x, -1),
+            )
+
+        if d_y:
+            d_y /= d_y
+            deltas = (
+                (d_y, 1),
+                (d_y, -1),
+            )
+
+        return self._get_neighbours(deltas)
+
+    def trace_to(self, cell: 'Cell', **filters):
+        """Yield all neighbours under a straight line to cell"""
+        slope_x, slope_y = self.x - cell.x, self.y - cell.y
+        dist = math.sqrt(slope_x ** 2 + slope_y ** 2)
+        if dist == 0:
+            return
+
+        unit_x, unit_y = slope_x / dist, slope_y / dist
+
+        x, y = cell.x, cell.y
+        traveled = 0
+        encountered = set()
+        while traveled < dist:
+            x += unit_x
+            y += unit_y
+
+            traced = self._control.get_cell(math.floor(x), math.floor(y))
+            if traced and traced not in encountered:
+                encountered.add(traced)
+                yield traced
+
+            traveled += dist
 
     @property
     def num_flags_left(self):

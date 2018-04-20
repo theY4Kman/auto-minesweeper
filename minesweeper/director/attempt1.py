@@ -20,7 +20,7 @@ import operator
 from functools import reduce
 
 from random import SystemRandom
-from typing import List
+from typing import List, Set
 
 from minesweeper.datastructures import NeighborGraph
 from minesweeper.director.base import Cell
@@ -126,7 +126,7 @@ class AttemptUnoDirector(RandomExpansionDirector):
         attr, cell = move
         getattr(cell, attr)()
 
-    def choose_best_cell(self, unrevealed_cells):
+    def choose_appealing_cell(self, unrevealed_cells):
         """Pick the most appealing cell to reveal, all confidence being equal"""
         lowest_dist = float('Inf')
         best_cell = None
@@ -139,60 +139,77 @@ class AttemptUnoDirector(RandomExpansionDirector):
         return best_cell, lowest_dist
 
     def get_next_moves(self):
-        confident_planners = (
-            self.obvious,
-            self.immediate_grouping,
-            self.indirect_grouping,
-            self.first_click,
-            self.endgame_insight,
+        # Each planners should return an iterable (or generator) of plans, which
+        # are lists of ('action', cell)
+        planner_tiers = (
+            ('confident', (
+                self.obvious,
+                self.immediate_grouping,
+                self.indirect_grouping,
+                self.first_click,
+                self.endgame_obvious,
+                self.endgame_insight,
+            )),
+            ('heuristic guess', (
+                self.expand_to_border,
+            )),
+            ('heuristic guess', (
+                self.expand_cardinally,
+            )),
+            ('total guess', (
+                self.expand_randomly,
+            )),
         )
 
-        guess_planners = (
-            self.expand_cardinally,
-            self.expand_randomly,
-        )
+        for planner_type, planners in planner_tiers:
+            plans = [
+                (planner, plan)
+                for planner in planners
+                for plan in planner() or ()
+                if plan
+            ]
 
-        # Ask each of our confident planners for their suggested moves
-        plans = {planner: planner()
-                 for planner in confident_planners}
+            if self.history:
+                revealed_between = {}
+                _, (last_x, last_y) = self.history[-1]
+                last_cell = self.control.get_cell(last_x, last_y)
 
-        # Filter out empty plans
-        plans = {planner: plan
-                 for planner, plan in plans.items()
-                 if plan}
+                for planner, plan in plans:
+                    for action, cell in plan:
+                        if cell in revealed_between:
+                            continue
 
-        # Find the planner with the closest move to the last cell acted upon
-        closest_plan, closest_planner = None, None
-        lowest_dist = float('Inf')
-        for planner, plan in plans.items():
-            best_cell, dist = self.choose_best_cell(cell for _, cell in plan)
-            if dist < lowest_dist:
-                lowest_dist = dist
-                closest_plan = plan
-                closest_planner = planner
+                        num_revealed_trace = len(tuple(cell.trace_to(last_cell)))
+                        revealed_between[cell] = (num_revealed_trace, planner, plan)
 
-        if closest_plan:
-            logger.info('Chose plan of %s (distance of %f to last cell): %r',
-                        closest_planner, lowest_dist, closest_plan)
-            return closest_plan
+                if revealed_between:
+                    scored_plans = sorted(revealed_between.values(), key=lambda t: t[0])
+                    num_revealed_trace, planner, plan = next(iter(scored_plans))
 
-        elif plans:
-            random_planner, random_plan = random.choice(tuple(plans.items()))
-            logger.info('Randomly chose plan of %s: %r',
-                        random_planner, random_plan)
-            return random_plan
+                    logger.info('Chose %s plan of %s (%d unrevelead between): %r',
+                                planner_type, planner.__name__, num_revealed_trace, plan)
+                    return plan
 
-        elif not self.disable_low_confidence:
-            for guesser in guess_planners:
-                possible_moves = guesser()
-                # XXX: this assumes guessers return not plans, but lists of
-                #      possible single-click actions
-                assert all(action == 'click' for action, cell in possible_moves)
+            # Find the planner with the closest move to the last cell acted upon
+            closest_plan, closest_planner = None, None
+            lowest_dist = float('Inf')
+            for planner, plan in plans:
+                best_cell, dist = self.choose_appealing_cell(cell for _, cell in plan)
+                if dist < lowest_dist:
+                    lowest_dist = dist
+                    closest_plan = plan
+                    closest_planner = planner
 
-                if possible_moves:
-                    best_cell, _ = self.choose_best_cell(cell for action, cell in possible_moves)
-                    logger.info('Chose to click %s using guess planner %s', best_cell, guesser)
-                    return [('click', best_cell)]
+            if closest_plan:
+                logger.info('Chose %s plan of %s (distance of %f to last cell): %r',
+                            planner_type, closest_planner.__name__, lowest_dist, closest_plan)
+                return closest_plan
+
+            elif plans:
+                random_planner, random_plan = random.choice(plans)
+                logger.info('Randomly chose %s plan of %s: %r',
+                            planner_type, random_planner, random_plan)
+                return random_plan
 
     def act(self):
         # Sorting makes the director more visually appealing by having most
@@ -229,24 +246,26 @@ class AttemptUnoDirector(RandomExpansionDirector):
 
         """
         for cell in self._numbered:
-            neighbors = cell.get_neighbors()
-            flagged = [c for c in neighbors if c.is_flagged()]
-            unrevealed = [c for c in neighbors if c.is_unrevealed()]
+            unrevealed = cell.get_neighbors(is_unrevealed=True)
+            if not unrevealed:
+                # Ehhh, who needs you!
+                continue
+
+            num_flags_left = cell.num_flags_left
 
             # If the number of unrevealed neighbours matches our number, flag!
-            total_neighbours = len(flagged) + len(unrevealed)
-            if unrevealed and total_neighbours == cell.number:
-                return [('right_click', c) for c in unrevealed]
+            if len(unrevealed) == num_flags_left:
+                yield [('right_click', c) for c in unrevealed]
 
             # If the number of flagged neighbours matches our number and we
             # still have unrevealed neighbours, cascade!
-            if unrevealed and len(flagged) == cell.number:
-                cell.middle_click()
-                return [('middle_click', cell)]
+            if unrevealed and not num_flags_left:
+                yield [('middle_click', cell)]
 
     def grouping(self):
         """Deductive reasoning using info from neighbours"""
-        return self.immediate_grouping() or self.indirect_grouping()
+        yield from self.immediate_grouping()
+        yield from self.indirect_grouping()
 
     def immediate_grouping(self):
         """Deductive reasoning using info from direct relatives
@@ -281,11 +300,11 @@ class AttemptUnoDirector(RandomExpansionDirector):
 
                     unshared = neighbor_unrevealed - unrevealed
                     if necessary == neighbor_num_flags_left:
-                        return [('click', c) for c in unshared]
+                        yield [('click', c) for c in unshared]
                     else:
                         necessary_diff = neighbor_num_flags_left - necessary
                         if necessary_diff == len(unshared):
-                            return [('right_click', c) for c in unshared]
+                            yield [('right_click', c) for c in unshared]
 
     def indirect_grouping(self):
         """Deductive reasoning using info from extended relatives
@@ -345,7 +364,7 @@ class AttemptUnoDirector(RandomExpansionDirector):
                             ('mark2', cell),
                             ('mark3', insightful_neighbor),
                         ]
-                        return plan + debug
+                        yield plan + debug
 
                     elif neighbor_needs_after_insight == len(staked_cells):
                         logger.debug('Found indirect grouping on staked cells '
@@ -357,7 +376,7 @@ class AttemptUnoDirector(RandomExpansionDirector):
                             ('mark2', cell),
                             ('mark3', insightful_neighbor),
                         ]
-                        return plan + debug
+                        yield plan + debug
 
     def first_click(self):
         if not self._revealed:
@@ -373,7 +392,12 @@ class AttemptUnoDirector(RandomExpansionDirector):
             edges = list(edges)
             coord = random.choice(edges)
             cell = self.control.get_cell(*coord)
-            return [('click', cell)]
+            yield [('click', cell)]
+
+    def endgame_obvious(self):
+        """Click on any remaining unrevealed cells if all mines are gone"""
+        if self.control.get_mines_left() == 0:
+            yield [('click', c) for c in self._cells if c.is_unrevealed()]
 
     def endgame_insight(self):
         """Inference of final action deduced from number of mines left"""
@@ -385,49 +409,88 @@ class AttemptUnoDirector(RandomExpansionDirector):
         total_unrevealed = sum(1 for c in self._cells if c.is_unrevealed())
         num_mines_left = self.control.get_mines_left()
         if num_mines_left == len(shared):
-            return [('right_click', c) for c in shared]
+            yield [('right_click', c) for c in shared]
         elif total_unrevealed - len(shared) == num_mines_left:
-            return [('click', c) for c in shared]
+            yield [('click', c) for c in shared]
+
+    def expand_to_border(self):
+        """Expand onto the border, which can often provide grouping intel
+        """
+        # XXX: this is maybe getting folded into expand_cardinally
+        # border_expanders = {
+        #     neighbor
+        #     for cell in self._numbered
+        #     for neighbor in cell.get_neighbors(is_unrevealed=True,
+        #                                        is_on_border=True)
+        # }
+        # return [('click', cell) for cell in border_expanders]
 
     def expand_cardinally(self):
         # If no other good choice, expand randomly in a cardinal direction
         # This gives a better chance of being able to use deductive reasoning
         # with groups next turn.
-        cardinal_neighbors = set()
         highest_chances = {}
         for cell in self._numbered:
-            neighbors = cell.get_cardinal_neighbors(is_unrevealed=True)
-            cardinal_neighbors.update(neighbors)
+            unrevealed = len(cell.get_neighbors(is_unrevealed=True))
+            if not unrevealed:
+                continue
 
-            unrevealed = cell.get_neighbors(is_unrevealed=True)
             necessary = cell.num_flags_left
-            highest_chance = necessary / len(unrevealed) if unrevealed else 0
+            chance = necessary / unrevealed
 
-            for neighbor in neighbors:
-                if highest_chance > highest_chances.get(neighbor, -1):
-                    highest_chances[neighbor] = highest_chance
+            cardinal_neighbors = cell.get_cardinal_neighbors(is_unrevealed=True)
+            for neighbor in cardinal_neighbors:
+                if chance > highest_chances.get(neighbor, -1):
+                    highest_chances[neighbor] = chance
 
-        if cardinal_neighbors:
-            scored = [(score, cell) for cell, score in highest_chances.items()]
-            scored.sort(key=lambda t: t[0])  # sort by chance, ascending
-            high_score, _ = scored[0]
-            contenders = {
-                c
-                for c, score in highest_chances.items()
-                if score >= high_score
-            }
-            logger.debug('Expand cardinally offered choices with score %.3f: %s',
-                         high_score, contenders)
-            return [('click', cell) for cell in contenders]
+        if not highest_chances:
+            return
+
+        scored = [(score, cell) for cell, score in highest_chances.items()]
+        scored.sort(key=lambda t: t[0])  # sort by chance, ascending
+        high_score, _ = scored[0]
+        upper_bound = max(high_score, 0.25)  # heuristic, below 0.25, I'd rather
+                                             # prefer grouping to high chances
+        contenders: Set[Cell] = {
+            c
+            for c, score in highest_chances.items()
+            if score <= upper_bound
+        }
+
+        # If any are across from another number, filter to them, as they will
+        # afford more grouping opportunities, if empty
+        across_from = (
+            (contender, contender.get_cardinal_neighbor_across_from(neighbor))
+            for contender in contenders
+            for neighbor in contender.get_cardinal_neighbors(is_number=True)
+        )
+        grouper_contenders = {
+            contender
+            for contender, across in across_from
+            if not across or across.is_revealed() or across.is_flagged()
+        }
+        if grouper_contenders:
+            logger.debug(
+                'Filtered cardinal expansion contenders to groupers %s from %s',
+                grouper_contenders, contenders)
+            contenders = grouper_contenders
+
+        # Get neighbors across from, across_n
+        # Get all the flagged/ neighbors of across_n
+        # Subtract the neighbors of cell perpendicular to across_n
+        # If there are 8 of those, choose *that* shit
+
+
+        logger.debug('Expand cardinally offered %d choices with score %.3f: %s',
+                     len(contenders), high_score, contenders)
+        return [[('click', cell)] for cell in contenders]
 
     def expand_randomly(self):
         # If no cardinal neighbor found, fall back to random expansion
-        choices = set()
-        for cell in self._revealed:
-            neighbors = {c for c in cell.get_neighbors() if c.is_unrevealed()}
-            choices.update(neighbors)
+        choices = {
+            neighbor
+            for cell in self._numbered
+            for neighbor in cell.get_neighbors(is_unrevealed=True)
+        }
 
-        choices = tuple(choices)
-        if choices:
-            selection = random.choice(choices)
-            return [('click', selection)]
+        return [[('click', cell)] for cell in choices]
