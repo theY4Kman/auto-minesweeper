@@ -459,16 +459,15 @@ class AttemptUnoDirector(RandomExpansionDirector):
 
         # If any are across from another number, filter to them, as they will
         # afford more grouping opportunities, if empty
-        across_from = (
-            (contender, contender.get_cardinal_neighbor_across_from(neighbor))
-            for contender in contenders
-            for neighbor in contender.get_cardinal_neighbors(is_number=True)
-        )
-        grouper_contenders = {
-            contender
-            for contender, across in across_from
-            if not across or across.is_revealed() or across.is_flagged()
-        }
+        grouper_contenders = []
+        for contender in contenders:
+            for neighbor in contender.get_cardinal_neighbors(is_number=True):
+                across = contender.get_cardinal_neighbor_across_from(neighbor)
+                if not across or across.is_revealed() or across.is_flagged():
+                    logger.debug('Found grouper contender %s across from %s and %s',
+                                 contender, neighbor, across)
+                    grouper_contenders.append(contender)
+
         if grouper_contenders:
             logger.debug(
                 'Filtered cardinal expansion contenders to groupers %s from %s',

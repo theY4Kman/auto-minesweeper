@@ -5,6 +5,7 @@ import math
 from itertools import starmap
 from typing import Set, Iterable
 
+from minesweeper.raytrace import int_trace
 from minesweeper.util import apply_method_filter
 
 
@@ -245,26 +246,8 @@ class Cell(object):
 
     def trace_to(self, cell: 'Cell', **filters):
         """Yield all neighbours under a straight line to cell"""
-        slope_x, slope_y = self.x - cell.x, self.y - cell.y
-        dist = math.sqrt(slope_x ** 2 + slope_y ** 2)
-        if dist == 0:
-            return
-
-        unit_x, unit_y = slope_x / dist, slope_y / dist
-
-        x, y = cell.x, cell.y
-        traveled = 0
-        encountered = set()
-        while traveled < dist:
-            x += unit_x
-            y += unit_y
-
-            traced = self._control.get_cell(math.floor(x), math.floor(y))
-            if traced and traced not in encountered:
-                encountered.add(traced)
-                yield traced
-
-            traveled += dist
+        for x, y in int_trace(self.x, self.y, cell.x, cell.y):
+            yield self._control.get_cell(x, y)
 
     @property
     def num_flags_left(self):
