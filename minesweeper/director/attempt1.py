@@ -449,8 +449,9 @@ class AttemptUnoDirector(RandomExpansionDirector):
         scored = [(score, cell) for cell, score in highest_chances.items()]
         scored.sort(key=lambda t: t[0])  # sort by chance, ascending
         high_score, _ = scored[0]
-        upper_bound = max(high_score, 0.25)  # heuristic, below 0.25, I'd rather
-                                             # prefer grouping to high chances
+        upper_bound = max(high_score, 0.34)  # heuristic, below 1 in 3 chance,
+                                             # I'd rather prefer spots that
+                                             # allow for further deduction
         contenders: Set[Cell] = {
             c
             for c, score in highest_chances.items()
