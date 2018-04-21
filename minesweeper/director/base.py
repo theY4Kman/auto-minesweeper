@@ -214,12 +214,12 @@ class Cell(object):
     def get_neighbor_across_from(self, cell: 'Cell') -> 'Cell':
         d_x, d_y = self.x - cell.x, self.y - cell.y
         if (d_x, d_y) in self.get_neighbor_deltas():
-            return self.get_neighbor_at(d_x, d_y)
+            return cell.get_neighbor_at(d_x, d_y)
 
     def get_cardinal_neighbor_across_from(self, cell: 'Cell') -> 'Cell':
-        d_x, d_y = self.x - cell.x, self.y - cell.y
+        d_x, d_y = cell.x - self.x, cell.y - self.y
         if (d_x, d_y) in self.get_cardinal_neighbor_deltas():
-            return self.get_neighbor_at(d_x, d_y)
+            return cell.get_neighbor_at(d_x, d_y)
 
     def get_perpendicular_neighbors_from(self, cell: 'Cell') -> Iterable['Cell']:
         if self.x != cell.x and self.y != cell.y:
