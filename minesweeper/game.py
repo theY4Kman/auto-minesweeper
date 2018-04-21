@@ -855,6 +855,11 @@ class Game(object):
                     mousedown_cell = None
                     mousedown_button = None
 
+                elif event.type == pygame.KEYUP:
+                    if event.key == pygame.K_RETURN:
+                        # Treat pressing Enter as pressing the margin
+                        self.on_margin_clicked()
+
             dirty_rects += self.check_winning_state()
 
             # Director acting!
