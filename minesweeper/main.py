@@ -1,5 +1,6 @@
 import argparse
 import logging
+logging.basicConfig(level=logging.DEBUG)
 
 from minesweeper import Game, AttemptUnoDirector
 

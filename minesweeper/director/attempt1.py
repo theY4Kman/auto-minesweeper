@@ -159,6 +159,9 @@ class AttemptUnoDirector(RandomExpansionDirector):
             ('total guess', (
                 self.expand_randomly,
             )),
+            ('last resort', (
+                self.choose_randomly,
+            )),
         )
 
         for planner_type, planners in planner_tiers:
@@ -494,3 +497,6 @@ class AttemptUnoDirector(RandomExpansionDirector):
         }
 
         return [[('click', cell)] for cell in choices]
+
+    def choose_randomly(self):
+        return [[('click', cell)] for cell in self._cells if cell.is_unrevealed()]
