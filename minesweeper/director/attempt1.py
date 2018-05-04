@@ -142,7 +142,7 @@ class AttemptUnoDirector(RandomExpansionDirector):
         # Each planners should return an iterable (or generator) of plans, which
         # are lists of ('action', cell)
         planner_tiers = (
-            ('confident', (
+            ('confident', True, (
                 self.obvious,
                 self.immediate_grouping,
                 self.indirect_grouping,
@@ -150,21 +150,21 @@ class AttemptUnoDirector(RandomExpansionDirector):
                 self.endgame_obvious,
                 self.endgame_insight,
             )),
-            ('heuristic guess', (
+            ('heuristic guess', False, (
                 self.expand_to_border,
             )),
-            ('heuristic guess', (
+            ('heuristic guess', False, (
                 self.expand_cardinally,
             )),
-            ('total guess', (
+            ('total guess', False, (
                 self.expand_randomly,
             )),
-            ('last resort', (
+            ('last resort', False, (
                 self.choose_randomly,
             )),
         )
 
-        for planner_type, planners in planner_tiers:
+        for planner_type, is_confident, planners in planner_tiers:
             plans = [
                 (planner, plan)
                 for planner in planners
@@ -172,43 +172,47 @@ class AttemptUnoDirector(RandomExpansionDirector):
                 if plan
             ]
 
-            if self.history:
-                revealed_between = {}
-                _, (last_x, last_y) = self.history[-1]
-                last_cell = self.control.get_cell(last_x, last_y)
+            # Only choose visually appealing plans if all are equally as probable
+            # (This seems like it could be generalized to all confidence levels,
+            #  but this scratches the itch for now.)
+            if is_confident:
+                if self.history:
+                    revealed_between = {}
+                    _, (last_x, last_y) = self.history[-1]
+                    last_cell = self.control.get_cell(last_x, last_y)
 
+                    for planner, plan in plans:
+                        for action, cell in plan:
+                            if cell in revealed_between:
+                                continue
+
+                            num_revealed_trace = len(tuple(cell.trace_to(last_cell)))
+                            revealed_between[cell] = (num_revealed_trace, planner, plan)
+
+                    if revealed_between:
+                        scored_plans = sorted(revealed_between.values(), key=lambda t: t[0])
+                        num_revealed_trace, planner, plan = next(iter(scored_plans))
+
+                        logger.info('Chose %s plan of %s (%d unrevelead between): %r',
+                                    planner_type, planner.__name__, num_revealed_trace, plan)
+                        return plan
+
+                # Find the planner with the closest move to the last cell acted upon
+                closest_plan, closest_planner = None, None
+                lowest_dist = float('Inf')
                 for planner, plan in plans:
-                    for action, cell in plan:
-                        if cell in revealed_between:
-                            continue
+                    best_cell, dist = self.choose_appealing_cell(cell for _, cell in plan)
+                    if dist < lowest_dist:
+                        lowest_dist = dist
+                        closest_plan = plan
+                        closest_planner = planner
 
-                        num_revealed_trace = len(tuple(cell.trace_to(last_cell)))
-                        revealed_between[cell] = (num_revealed_trace, planner, plan)
+                if closest_plan:
+                    logger.info('Chose %s plan of %s (distance of %f to last cell): %r',
+                                planner_type, closest_planner.__name__, lowest_dist, closest_plan)
+                    return closest_plan
 
-                if revealed_between:
-                    scored_plans = sorted(revealed_between.values(), key=lambda t: t[0])
-                    num_revealed_trace, planner, plan = next(iter(scored_plans))
-
-                    logger.info('Chose %s plan of %s (%d unrevelead between): %r',
-                                planner_type, planner.__name__, num_revealed_trace, plan)
-                    return plan
-
-            # Find the planner with the closest move to the last cell acted upon
-            closest_plan, closest_planner = None, None
-            lowest_dist = float('Inf')
-            for planner, plan in plans:
-                best_cell, dist = self.choose_appealing_cell(cell for _, cell in plan)
-                if dist < lowest_dist:
-                    lowest_dist = dist
-                    closest_plan = plan
-                    closest_planner = planner
-
-            if closest_plan:
-                logger.info('Chose %s plan of %s (distance of %f to last cell): %r',
-                            planner_type, closest_planner.__name__, lowest_dist, closest_plan)
-                return closest_plan
-
-            elif plans:
+            if plans:
                 random_planner, random_plan = random.choice(plans)
                 logger.info('Randomly chose %s plan of %s: %r',
                             planner_type, random_planner, random_plan)
