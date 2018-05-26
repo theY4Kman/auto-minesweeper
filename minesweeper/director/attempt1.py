@@ -1,11 +1,5 @@
 """
 TODO:
- - Grouping deductions amongst cells which don't touch:
-
-    F|2|.       F|2|.
-    F|3|.  =>   F|3|.
-    .|#|#       .|#|#
-    .|2|#       .|2|.
 
  - Grouping deductions requiring thought among several groups:
 
