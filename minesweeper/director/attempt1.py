@@ -416,17 +416,33 @@ class AttemptUnoDirector(RandomExpansionDirector):
         # If no other good choice, expand randomly in a cardinal direction
         # This gives a better chance of being able to use deductive reasoning
         # with groups next turn.
+        graph = CellGraph(self._numbered, lambda c: c.get_neighbors(is_unrevealed=True))
         highest_chances = {}
         for cell in self._numbered:
-            unrevealed = len(cell.get_neighbors(is_unrevealed=True))
+            unrevealed = cell.get_neighbors(is_unrevealed=True)
             if not unrevealed:
                 continue
 
-            necessary = cell.num_flags_left
-            chance = necessary / unrevealed
+            highest_num_flags_left = 0
+            highest_grouper = None
+            for grouper in graph.with_subsets_of(cell, strict=True):
+                grouper_num_flags_left = grouper.num_flags_left
+                if grouper_num_flags_left > highest_num_flags_left:
+                    highest_num_flags_left = grouper_num_flags_left
+                    highest_grouper = grouper
 
-            cardinal_neighbors = cell.get_cardinal_neighbors(is_unrevealed=True)
-            for neighbor in cardinal_neighbors:
+            necessary = cell.num_flags_left
+            if highest_grouper:
+                necessary -= highest_num_flags_left
+                neighbors = highest_grouper.get_neighbors(is_unrevealed=True)
+                unrevealed -= neighbors
+                logger.debug('Lowered num flags left of %s from %s to %s, by '
+                             'removing unrevealed neighbors of %s: %s',
+                             cell, cell.num_flags_left, necessary,
+                             highest_grouper, neighbors)
+
+            chance = necessary / len(unrevealed)
+            for neighbor in unrevealed:
                 if chance > highest_chances.get(neighbor, -1):
                     highest_chances[neighbor] = chance
 
