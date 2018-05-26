@@ -22,7 +22,7 @@ from functools import reduce
 from random import SystemRandom
 from typing import List, Set
 
-from minesweeper.datastructures import NeighborGraph
+from minesweeper.datastructures import CellGraph
 from minesweeper.director.base import Cell
 from minesweeper.director.random_director import RandomExpansionDirector
 
@@ -151,9 +151,6 @@ class AttemptUnoDirector(RandomExpansionDirector):
                 self.endgame_insight,
             )),
             ('heuristic guess', False, (
-                self.expand_to_border,
-            )),
-            ('heuristic guess', False, (
                 self.expand_cardinally,
             )),
             ('total guess', False, (
@@ -237,6 +234,11 @@ class AttemptUnoDirector(RandomExpansionDirector):
     def obvious(self):
         """Trivial moves based on game rules
 
+        This includes revealing a cell's unrevealed neighbours if it's already
+        surrounded by the requisite number of flags, or flagging those
+        unrevealed neighbours if the number of flags the cell requires matches
+        the number of unrevealed neighbours.
+
         Examples:
 
             1. Flagging
@@ -269,11 +271,6 @@ class AttemptUnoDirector(RandomExpansionDirector):
             if unrevealed and not num_flags_left:
                 yield [('middle_click', cell)]
 
-    def grouping(self):
-        """Deductive reasoning using info from neighbours"""
-        yield from self.immediate_grouping()
-        yield from self.indirect_grouping()
-
     def immediate_grouping(self):
         """Deductive reasoning using info from direct relatives
 
@@ -286,12 +283,12 @@ class AttemptUnoDirector(RandomExpansionDirector):
                                 ^
 
         """
-        nm = NeighborGraph(self._numbered, lambda n: n.is_unrevealed())
+        graph = CellGraph(self._numbered, lambda c: c.get_neighbors(is_unrevealed=True))
 
         # Deductive reasoning through grouping
         for cell in self._numbered:
             neighbors = cell.get_neighbors()
-            numbered_neighbors = nm.subsets_of(cell) | nm.supersets_of(cell)
+            numbered_neighbors = graph.relatives_of(cell)
 
             flagged = [c for c in neighbors if c.is_flagged()]
             unrevealed = {c for c in neighbors if c.is_unrevealed()}
@@ -325,7 +322,7 @@ class AttemptUnoDirector(RandomExpansionDirector):
                               ^
 
         """
-        unrevealed_graph = NeighborGraph(self._numbered, lambda n: n.is_unrevealed())
+        unrevealed_graph = CellGraph(self._numbered, lambda c: c.get_neighbors(is_unrevealed=True))
 
         for cell in self._numbered:
             cell_needs = cell.num_flags_left
@@ -334,24 +331,19 @@ class AttemptUnoDirector(RandomExpansionDirector):
 
             cell_unrevealed = cell.get_neighbors(is_unrevealed=True)
 
-            neighbors = unrevealed_graph.supersets_of(cell)
+            neighbors = unrevealed_graph.with_supersets_of(cell)
             for neighbor in neighbors:
                 neighbor_needs = neighbor.num_flags_left
                 neighbor_unrevealed = neighbor.get_neighbors(is_unrevealed=True)
 
-                insightful_neighbors = unrevealed_graph.subsets_of(neighbor) - {cell}
+                insightful_neighbors = unrevealed_graph.with_subsets_of(neighbor, strict=True)
                 for insightful_neighbor in insightful_neighbors:
                     insightful_neighbor_needs = insightful_neighbor.num_flags_left
                     insightful_neighbor_unrevealed = insightful_neighbor.get_neighbors(is_unrevealed=True)
 
                     if cell_unrevealed.intersection(insightful_neighbor_unrevealed):
                         # If the insightful neighbour shares any of the same
-                        # unrevealed spots as cell, well, she wasn't very
-                        # insightful, was she?
-
-                        # nah but 4realzies idk how to do anything with that
-                        # kind of neighbor. Maybe there is a use, but idk it now
-
+                        # unrevealed spots as cell, we can't use her (I think)
                         continue
 
                     # Unrevealed neighbours of neighbor, after removing both
@@ -420,18 +412,6 @@ class AttemptUnoDirector(RandomExpansionDirector):
         elif total_unrevealed - len(shared) == num_mines_left:
             yield [('click', c) for c in shared]
 
-    def expand_to_border(self):
-        """Expand onto the border, which can often provide grouping intel
-        """
-        # XXX: this is maybe getting folded into expand_cardinally
-        # border_expanders = {
-        #     neighbor
-        #     for cell in self._numbered
-        #     for neighbor in cell.get_neighbors(is_unrevealed=True,
-        #                                        is_on_border=True)
-        # }
-        # return [('click', cell) for cell in border_expanders]
-
     def expand_cardinally(self):
         # If no other good choice, expand randomly in a cardinal direction
         # This gives a better chance of being able to use deductive reasoning
@@ -465,28 +445,26 @@ class AttemptUnoDirector(RandomExpansionDirector):
             if score <= upper_bound
         }
 
-        # If any are across from another number, filter to them, as they will
-        # afford more grouping opportunities, if empty
+        # Prefer any contenders which are cardinally adjacent to a numbered cell
+        # whose unrevealed neighbours are a strict subset of the contenders'
+        # unrevealed neighbours.
+        # These will allow further deductive reasoning, depending on the number.
         grouper_contenders = []
         for contender in contenders:
-            for neighbor in contender.get_cardinal_neighbors(is_number=True):
-                across = contender.get_cardinal_neighbor_across_from(neighbor)
-                if not across or across.is_revealed() or across.is_flagged():
-                    logger.debug('Found grouper contender %s across from %s and %s',
-                                 contender, neighbor, across)
-                    grouper_contenders.append(contender)
+            graph = CellGraph(self._numbered + [contender],
+                              lambda c: c.get_neighbors(is_unrevealed=True) - {contender})
+            grouping_neighbors = graph.with_subsets_of(contender)
+            if grouping_neighbors:
+                logger.debug('Found grouper contender %s having subset-sharing '
+                             'neighbors %s',
+                             contender, grouping_neighbors)
+                grouper_contenders.append(contender)
 
         if grouper_contenders:
             logger.debug(
                 'Filtered cardinal expansion contenders to groupers %s from %s',
                 grouper_contenders, contenders)
             contenders = grouper_contenders
-
-        # Get neighbors across from, across_n
-        # Get all the flagged/ neighbors of across_n
-        # Subtract the neighbors of cell perpendicular to across_n
-        # If there are 8 of those, choose *that* shit
-
 
         logger.debug('Expand cardinally offered %d choices with score %.3f: %s',
                      len(contenders), high_score, contenders)
