@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime
 
@@ -10,6 +11,8 @@ import pygame
 _pygame_initialized = False
 
 from minesweeper.director.base import BaseControl, Cell as DirectorCell
+
+logger = logging.getLogger(__name__)
 
 
 ROOT_DIR = os.path.dirname(__file__)
@@ -719,6 +722,8 @@ class Game(object):
             cell.is_game_over = True
 
     def lose(self):
+        logger.info('Lose :(')
+
         self.lost = True
         self.in_play = False
         self._set_game_over()
@@ -726,6 +731,8 @@ class Game(object):
         self.save(self.generate_filename(SAVE_LOSS_DIR))
 
     def win(self):
+        logger.info('WIN!!!')
+
         self.won = True
         self.in_play = False
         self._set_game_over()

@@ -2,7 +2,7 @@ import argparse
 import logging
 logging.basicConfig(level=logging.DEBUG)
 
-from minesweeper import Game, AttemptUnoDirector
+from minesweeper import Game, AttemptUnoDirector, AttemptDosDirector
 
 
 def main(argv=None):
@@ -22,7 +22,7 @@ def main(argv=None):
                         help='Repeat loaded scenario')
 
     parser.add_argument('-d', '--director',
-                        choices=['none', 'attempt1'],
+                        choices=['none', 'attempt1', 'attempt2'],
                         default='attempt1',
                         help='AI director to use (none to disable)')
     parser.add_argument('--director-skip-frames',
@@ -55,6 +55,10 @@ def main(argv=None):
     if args.director == 'attempt1':
         director = AttemptUnoDirector(
             disable_low_confidence=args.disable_low_confidence)
+        game.set_director(director)
+
+    elif args.director == 'attempt2':
+        director = AttemptDosDirector()
         game.set_director(director)
 
     if args.scenario:

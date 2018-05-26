@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 
 class AttemptUnoDirector(RandomExpansionDirector):
+    """A hodge-podge of strategies"""
+
     def __init__(self, *args, **kwargs):
         self.disable_low_confidence = kwargs.pop('disable_low_confidence',
                                                  False)
@@ -277,7 +279,8 @@ class AttemptUnoDirector(RandomExpansionDirector):
                                 ^
 
         """
-        graph = CellGraph(self._numbered, lambda c: c.get_neighbors(is_unrevealed=True))
+        graph = CellGraph(self._numbered,
+                         lambda c: c.get_neighbors(is_unrevealed=True))
 
         # Deductive reasoning through grouping
         for cell in self._numbered:
@@ -325,12 +328,12 @@ class AttemptUnoDirector(RandomExpansionDirector):
 
             cell_unrevealed = cell.get_neighbors(is_unrevealed=True)
 
-            neighbors = unrevealed_graph.with_supersets_of(cell)
+            neighbors = unrevealed_graph.relatives_containing(cell)
             for neighbor in neighbors:
                 neighbor_needs = neighbor.num_flags_left
                 neighbor_unrevealed = neighbor.get_neighbors(is_unrevealed=True)
 
-                insightful_neighbors = unrevealed_graph.with_subsets_of(neighbor, strict=True)
+                insightful_neighbors = unrevealed_graph.relatives_contained_by(neighbor, strict=True)
                 for insightful_neighbor in insightful_neighbors:
                     insightful_neighbor_needs = insightful_neighbor.num_flags_left
                     insightful_neighbor_unrevealed = insightful_neighbor.get_neighbors(is_unrevealed=True)
@@ -419,7 +422,7 @@ class AttemptUnoDirector(RandomExpansionDirector):
 
             highest_num_flags_left = 0
             highest_grouper = None
-            for grouper in graph.with_subsets_of(cell, strict=True):
+            for grouper in graph.relatives_contained_by(cell, strict=True):
                 grouper_num_flags_left = grouper.num_flags_left
                 if grouper_num_flags_left > highest_num_flags_left:
                     highest_num_flags_left = grouper_num_flags_left
@@ -463,7 +466,7 @@ class AttemptUnoDirector(RandomExpansionDirector):
         for contender in contenders:
             graph = CellGraph(self._numbered + [contender],
                               lambda c: c.get_neighbors(is_unrevealed=True) - {contender})
-            grouping_neighbors = graph.with_subsets_of(contender)
+            grouping_neighbors = graph.relatives_contained_by(contender)
             if grouping_neighbors:
                 logger.debug('Found grouper contender %s having subset-sharing '
                              'neighbors %s',

@@ -1,4 +1,5 @@
 from minesweeper.director.attempt1 import AttemptUnoDirector
+from minesweeper.director.attempt2 import AttemptDosDirector
 from minesweeper.game import Game
 from minesweeper.main import main
 from minesweeper.version import VERSION
