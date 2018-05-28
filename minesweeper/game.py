@@ -522,7 +522,7 @@ class Game(object):
 
         game_margin = self.get_game_margin()
         self.scoreboard_rect = pygame.Rect(game_margin, game_margin,
-                                           100, SCOREBOARD_HEIGHT)
+                                           150, SCOREBOARD_HEIGHT)
 
         pygame.display.set_caption('Minesweeper')
 
@@ -756,12 +756,11 @@ class Game(object):
     def draw_score(self):
         self.clear_score()
 
+        text = '%-4.03d' % self.mines_left
         if self.won:
-            text = 'WIN!!!'
+            text += 'WIN!!!'
         elif self.lost:
-            text = 'LOSE'
-        else:
-            text = '%02d' % self.mines_left
+            text += 'LOSE'
 
         color = (0, 255, 0)
         scoreboard = self.scoreboard_font.render(text, 1, color)
