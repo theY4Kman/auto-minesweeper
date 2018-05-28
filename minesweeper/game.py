@@ -458,6 +458,7 @@ class Game(object):
 
         self.frame = None
         self.halt = None
+        self.paused = None
         self.screen = None
         self.clock = None
         self.scoreboard_rect = None
@@ -511,6 +512,7 @@ class Game(object):
         board_margin = self.get_board_margin()
         self.frame = 0
         self.halt = False
+        self.paused = False
         self.screen = pygame.display.set_mode((
             BOARD_WIDTH * CELL_PX + board_margin * 2,
             BOARD_HEIGHT * CELL_PX + board_margin * 2 + SCOREBOARD_HEIGHT,
@@ -867,10 +869,13 @@ class Game(object):
                         # Treat pressing Enter as pressing the margin
                         self.on_margin_clicked()
 
+                    if event.key == pygame.K_SPACE:
+                        self.paused = not self.paused
+
             dirty_rects += self.check_winning_state()
 
             # Director acting!
-            if self.in_play and self.director:
+            if self.in_play and self.director and not self.paused:
                 if self.frame >= self.director_act_at:
                     director_redraw_cells = self.director_cell_redraw
                     self.director_cell_redraw = []
