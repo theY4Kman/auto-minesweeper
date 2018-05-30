@@ -12,6 +12,8 @@ def main(argv=None):
     parser.add_argument('-s', '--scenario',
                         type=argparse.FileType('r'),
                         help='Scenario/saved game to load')
+    parser.add_argument('--state',
+                        help='Game state to load')
     parser.add_argument('-u', '--scenario-unrevealed',
                         type=bool,
                         default=False,
@@ -61,17 +63,31 @@ def main(argv=None):
         director = AttemptDosDirector()
         game.set_director(director)
 
-    if args.scenario:
-        # We want to manage opening the file ourselves
-        args.scenario.close()
+    if args.scenario and args.state:
+        raise RuntimeError("Cannot load both game state (--state) and scenario (-s/--scenario)")
 
-        def load_scenario():
-            game.load(args.scenario.name, unrevealed=args.scenario_unrevealed)
+    if args.scenario or args.state:
+        if args.scenario:
+            # We want to manage opening the file ourselves
+            args.scenario.close()
+
+            def load_scenario():
+                game.load(args.scenario.name, unrevealed=args.scenario_unrevealed)
+
+        elif args.state:
+            serialized = args.state.replace('\\n', '\n')
+
+            def load_scenario():
+                game.deserialize(serialized)
+        else:
+            assert False, 'THIS SHOULD NOT HAPPEN'
+
         if args.repeat:
             def on_margin_clicked():
                 game.init_game()
                 load_scenario()
             game.on_margin_clicked = on_margin_clicked
+
         load_scenario()
 
     game.clear_neighbors_of_first_click = args.mode == 'win7'
