@@ -57,6 +57,20 @@ class PropertyGraph(Generic[Obj, Prop]):
     def objects_containing(self, prop: Prop) -> Set[Obj]:
         return self._reverse[prop]
 
+    def get_independent_objects(self) -> Set[Obj]:
+        """All objects which share no props with any others"""
+        objects = set(self._props)
+        independent = set(objects)
+
+        for object in objects:
+            relatives = self.relatives_of(object)
+
+            if relatives:
+                independent -= relatives
+                independent.discard(object)
+
+        return independent
+
     def __contains__(self, o: Obj):
         return o in self._props
 
