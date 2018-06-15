@@ -1,10 +1,9 @@
 import logging
 import os
 from datetime import datetime
-
-from random import SystemRandom
 from typing import Set
 
+from random import SystemRandom
 random = SystemRandom()
 
 import pygame
@@ -879,16 +878,16 @@ class Game(object):
                     director_redraw_cells = self.director_cell_redraw
                     self.director_cell_redraw = []
 
-                    # Perform queued actions
-                    self.last_director_actions = tuple(self.director_control.get_actions())
-                    self.director_control.exec_queue()
-                    dirty_rects += self.check_winning_state()
-
                     if self.in_play:
                         # Determine next moves
                         self.director_control.reset_cache()
                         self.director.act()
                         self.director_act_at = self.frame + self.director_skip_frames
+
+                    # Perform queued actions
+                    self.last_director_actions = tuple(self.director_control.get_actions())
+                    self.director_control.exec_queue()
+                    dirty_rects += self.check_winning_state()
 
                     director_acted = True
 
