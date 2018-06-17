@@ -1,1 +1,4 @@
 pygame>=1.9.0
+automodinit==0.16
+psycopg2==2.7.4
+sqlalchemy==1.2.8

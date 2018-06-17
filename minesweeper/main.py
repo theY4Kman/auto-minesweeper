@@ -1,11 +1,16 @@
 import argparse
 import logging
+
+from minesweeper.director.base import get_directors
+
 logging.basicConfig(level=logging.DEBUG)
 
-from minesweeper import Game, AttemptUnoDirector, AttemptDosDirector
+from minesweeper import Game
 
 
 def main(argv=None):
+    available_directors = get_directors()
+
     parser = argparse.ArgumentParser(
         description='Minesweeper with an AI interface')
 
@@ -24,8 +29,8 @@ def main(argv=None):
                         help='Repeat loaded scenario')
 
     parser.add_argument('-d', '--director',
-                        choices=['none', 'attempt1', 'attempt2'],
-                        default='attempt1',
+                        choices=['none'] + list(available_directors),
+                        default='attempt2',
                         help='AI director to use (none to disable)')
     parser.add_argument('--director-skip-frames',
                         type=int,
@@ -39,11 +44,6 @@ def main(argv=None):
                              '(winxp=clear first clicked cell,'
                              ' win7=clear neighbours of first clicked cell)')
 
-    parser.add_argument('--disable-low-confidence',
-                        default=False,
-                        action='store_true',
-                        help='Disable low-confidence moves by the director')
-
     parser.add_argument("-v", "--verbose", help="increase output verbosity",
                         action="store_true")
 
@@ -54,14 +54,10 @@ def main(argv=None):
     game = Game()
 
     game.director_skip_frames = args.director_skip_frames
-    if args.director == 'attempt1':
-        director = AttemptUnoDirector(
-            disable_low_confidence=args.disable_low_confidence)
-        game.set_director(director)
-
-    elif args.director == 'attempt2':
-        director = AttemptDosDirector()
-        game.set_director(director)
+    if args.director:
+        director = available_directors.get(args.director)()
+        if director:
+            game.set_director(director)
 
     if args.scenario and args.state:
         raise RuntimeError("Cannot load both game state (--state) and scenario (-s/--scenario)")

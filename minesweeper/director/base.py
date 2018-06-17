@@ -1,12 +1,33 @@
 """
 A director controls the game, seeing only what a player might see.
 """
-import math
 from itertools import starmap
 from typing import Set, Iterable
 
 from minesweeper.raytrace import int_trace
 from minesweeper.util import apply_method_filter
+
+
+#: A registry of directors, so the CLI can offer them
+_DIRECTORS = {}
+
+
+def get_directors():
+    return _DIRECTORS
+
+
+def register_director(cls, slug=None):
+    """Register a Director for selection from the command-line"""
+    def register(cls):
+        _DIRECTORS[slug] = cls
+        return cls
+
+    if isinstance(cls, str):
+        slug = cls
+        return register
+    else:
+        slug = cls.__name__
+        register(cls)
 
 
 class BaseControl(object):
@@ -109,6 +130,10 @@ class Cell(object):
         self.y = y
         self.type = type_
 
+    @property
+    def idx(self):
+        return self.x * self._control.get_board_size()[1] + self.y
+
     def __str__(self):
         return 'Cell(x={x}, y={y}, type={type})'.format(
             x=self.x,
@@ -146,7 +171,7 @@ class Cell(object):
         return self.type == Cell.TYPE_UNREVEALED
 
     def is_revealed(self):
-        return not self.is_unrevealed()
+        return not self.is_unrevealed() and not self.is_flagged()
 
     def is_on_border(self):
         width, height = self._control.get_board_size()
