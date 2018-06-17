@@ -17,7 +17,7 @@ from random import SystemRandom
 from typing import List, Set
 
 from minesweeper.datastructures import CellGraph
-from minesweeper.director.base import Cell
+from minesweeper.director.base import Cell, register_director
 from minesweeper.director.random_director import RandomExpansionDirector
 
 random = SystemRandom()
@@ -25,6 +25,7 @@ random = SystemRandom()
 logger = logging.getLogger(__name__)
 
 
+@register_director('attempt1')
 class AttemptUnoDirector(RandomExpansionDirector):
     """A hodge-podge of strategies"""
 

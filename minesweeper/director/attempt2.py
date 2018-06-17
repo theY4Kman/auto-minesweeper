@@ -6,7 +6,7 @@ from itertools import chain
 from typing import Iterable, Tuple, Set, Optional, Union, Any
 
 from minesweeper.datastructures import PropertyGraph
-from minesweeper.director.base import Director, Cell
+from minesweeper.director.base import Director, Cell, register_director
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +263,7 @@ def split_moves(groups: Iterable[Group]
     return moves, probabilities
 
 
+@register_director('attempt2')
 class AttemptDosDirector(Director):
     """Strategies based on a heat map of mine probabilities"""
 

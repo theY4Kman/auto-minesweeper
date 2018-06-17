@@ -151,6 +151,10 @@ class Cell(object):
     is_revealed = redraw_prop('_is_revealed')
     is_game_over = redraw_prop('_is_game_over')
 
+    @property
+    def idx(self):
+        return self.i_x * self.game.height + self.i_y
+
     def serialize(self):
         if self.is_mine:
             if self.is_losing_mine:
@@ -461,8 +465,11 @@ class Game(object):
         self.paused = None
         self.screen = None
         self.clock = None
-        self.scoreboard_rect = None
-        self.scoreboard_font = None
+        self.hover_cell: Cell = None
+        self.hover_cell_rect: pygame.Rect = None
+        self.hover_cell_font: pygame.font.Font = None
+        self.scoreboard_rect: pygame.Rect = None
+        self.scoreboard_font: pygame.font.Font = None
         self.axis_index_font: pygame.font.Font = None
 
         self.lost = None
@@ -505,6 +512,7 @@ class Game(object):
             _pygame_initialized = True
 
         font_path = os.path.join(FONT_DIR, 'VT323-Regular.ttf')
+        self.hover_cell_font = pygame.font.Font(None, 18)
         self.scoreboard_font = pygame.font.Font(font_path, 36)
 
         self.axis_index_font = pygame.font.SysFont('Menlo,Andale Mono,Courier New', 9)
@@ -521,8 +529,15 @@ class Game(object):
         self.clock = pygame.time.Clock()
 
         game_margin = self.get_game_margin()
-        self.scoreboard_rect = pygame.Rect(game_margin, game_margin,
-                                           150, SCOREBOARD_HEIGHT)
+        hover_cell_width = 150
+        self.hover_cell_rect = pygame.Rect(
+            (self.screen.get_rect().width - hover_cell_width, game_margin),
+            (hover_cell_width, 30),
+        )
+        self.scoreboard_rect = pygame.Rect(
+            (game_margin, game_margin),
+            (150, SCOREBOARD_HEIGHT),
+        )
 
         pygame.display.set_caption('Minesweeper')
 
@@ -713,10 +728,13 @@ class Game(object):
         for cell in self.board.values():
             cell.determine_number()
 
-    def get_cell_under_mouse(self, x, y):
+    def get_cell_index_under_mouse(self, x, y):
         margin = self.get_board_margin()
         x, y = x - margin, y - margin - SCOREBOARD_HEIGHT
-        i_x, i_y = int(x) / CELL_PX, int(y) / CELL_PX
+        return x // CELL_PX, y // CELL_PX
+
+    def get_cell_under_mouse(self, x, y):
+        i_x, i_y = self.get_cell_index_under_mouse(x, y)
         return self.board.get((i_x, i_y))
 
     def _set_game_over(self):
@@ -765,6 +783,21 @@ class Game(object):
         color = (0, 255, 0)
         scoreboard = self.scoreboard_font.render(text, 1, color)
         self.screen.blit(scoreboard, self.scoreboard_rect)
+
+    def clear_hover_cell(self):
+        self.screen.fill((90,)*3, self.hover_cell_rect)
+
+    def draw_hover_cell(self):
+        self.clear_hover_cell()
+
+        text = ''
+        if self.hover_cell:
+            x, y = self.hover_cell.i_x, self.hover_cell.i_y
+            text += f'{x, y}'
+
+        color = (225, 25, 25)
+        hover_cell_info = self.hover_cell_font.render(text, 1, color)
+        self.screen.blit(hover_cell_info, self.hover_cell_rect)
 
     def draw_director_actions(self):
         dirty = []
@@ -846,6 +879,9 @@ class Game(object):
                 if event.type == pygame.QUIT:
                     self.halt = True
 
+                elif event.type == pygame.MOUSEMOTION:
+                    self.hover_cell = self.get_cell_under_mouse(*event.pos)
+
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     mousedown_cell = self.get_cell_under_mouse(*event.pos)
                     mousedown_button = event.button
@@ -914,6 +950,9 @@ class Game(object):
                 self._last_in_play = self.in_play
                 self.draw_score()
                 dirty_rects.append(self.scoreboard_rect)
+
+            self.draw_hover_cell()
+            dirty_rects.append(self.hover_cell_rect)
 
             if dirty_rects:
                 pygame.display.update(dirty_rects)
