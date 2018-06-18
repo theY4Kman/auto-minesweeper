@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Set
 
 from sqlalchemy import (
     Boolean,
@@ -16,7 +17,9 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import (
     aliased,
+    foreign,
     relationship,
+    remote,
     scoped_session,
     Session,
     sessionmaker,
@@ -66,6 +69,10 @@ class Observation(Model):
     lower_bound = Column(Integer)
     upper_bound = Column(Integer)
 
+    source = relationship(Cell, foreign_keys=[cell_idx])
+    cells = relationship(Cell, secondary='observation_cell', collection_class=set)
+    items = relationship('ObservationCell', collection_class=set)
+
 
 class ObservationCell(Model):
     __tablename__ = 'observation_cell'
@@ -76,6 +83,18 @@ class ObservationCell(Model):
     id = Column(Integer, primary_key=True)
     observation_id = Column(Integer, ForeignKey('observation.id', ondelete='CASCADE'), nullable=False)
     cell_idx = Column(Integer, ForeignKey('cell.idx'), nullable=False)
+
+    observation = relationship(Observation)
+
+
+related_obs_cell = aliased(ObservationCell)
+ObservationCell.related_observations = relationship(Observation,
+                                                    viewonly=True,
+                                                    secondary=related_obs_cell.__table__,
+                                                    primaryjoin=(ObservationCell.cell_idx == remote(foreign(related_obs_cell.cell_idx))) &
+                                                                (ObservationCell.observation_id != remote(foreign(related_obs_cell.observation_id))),
+                                                    secondaryjoin=related_obs_cell.observation_id == foreign(Observation.id),
+                                                    collection_class=set)
 
 
 @register_director('postgres')
@@ -165,8 +184,7 @@ class PostgresDirector(Director):
         self.session.commit()
 
         self.init_insights()
-
-        # TODO: propagate observations
+        self.propagate_observations()
 
         moves = self.choose_eager_moves()
         if moves:
@@ -265,6 +283,43 @@ class PostgresDirector(Director):
         insert_observation_cells = st
 
         self.session.execute(insert_observation_cells)
+        self.session.commit()
+
+    def propagate_observations(self):
+        observations = self.session.query(Observation).all()
+        dirty = set()
+
+        for observation in observations:
+            related_observations: Set[Observation] = {
+                related_obs
+                for observation_cell in observation.items
+                for related_obs in observation_cell.related_observations
+                if related_obs.id not in dirty
+            }
+
+            for related in related_observations:
+                shared_cells = observation.cells & related.cells
+                shared_upper = min(observation.upper_bound, related.upper_bound, len(shared_cells))
+
+                own_cells = observation.cells - related.cells
+                own_upper = observation.upper_bound - shared_upper
+
+                if own_cells and own_upper == len(own_cells):
+                    observation.cells -= own_cells
+                    observation.lower_bound -= len(own_cells)
+                    observation.upper_bound -= len(own_cells)
+                    self.session.merge(observation)
+
+                    new_obs = Observation(
+                        lower_bound=len(own_cells),
+                        upper_bound=len(own_cells),
+                        cells=own_cells
+                    )
+                    self.session.add(new_obs)
+                    self.session.flush()
+
+                    dirty.add(new_obs.id)
+
         self.session.commit()
 
     def choose_eager_moves(self):
