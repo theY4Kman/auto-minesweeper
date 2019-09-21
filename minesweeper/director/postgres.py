@@ -12,7 +12,7 @@ from sqlalchemy import (
     Sequence,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.postgresql import insert, ARRAY
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import (
     aliased,
@@ -63,19 +63,8 @@ class Observation(Model):
 
     id = Column(Integer, Sequence('observation_id_seq'), primary_key=True)
     cell_idx = Column(Integer, ForeignKey('cell.idx'))
-    lower_bound = Column(Integer)
-    upper_bound = Column(Integer)
-
-
-class ObservationCell(Model):
-    __tablename__ = 'observation_cell'
-    __table_args__ = (
-        UniqueConstraint('observation_id', 'cell_idx'),
-    )
-
-    id = Column(Integer, primary_key=True)
-    observation_id = Column(Integer, ForeignKey('observation.id', ondelete='CASCADE'), nullable=False)
-    cell_idx = Column(Integer, ForeignKey('cell.idx'), nullable=False)
+    cells = Column(ARRAY(Integer))
+    num_mines_remaining = Column(Integer)
 
 
 @register_director('postgres')
@@ -95,9 +84,6 @@ class PostgresDirector(Director):
     def connect(self):
         self.engine = create_engine(self.database_url, echo='debug')
         logging.getLogger('sqlalchemy.engine').propagate = False
-
-        # Setup some debugging helpers
-        self.engine.execute('CREATE EXTENSION IF NOT EXISTS tablefunc;')
 
         self._sessionmaker = scoped_session(sessionmaker(bind=self.engine))
 
@@ -165,8 +151,7 @@ class PostgresDirector(Director):
         self.session.commit()
 
         self.init_insights()
-
-        # TODO: propagate observations
+        self.propagate_observations()
 
         moves = self.choose_eager_moves()
         if moves:
@@ -215,18 +200,18 @@ class PostgresDirector(Director):
         )
         observations_data = st.cte('observations_data')
 
-        # Inserts our observations, with lower/upper bounds as num_flags_left
+        # Insert our observations
         st = insert(Observation)
         st = st.from_select(
             (
                 Observation.cell_idx,
-                Observation.lower_bound,
-                Observation.upper_bound,
+                Observation.cells,
+                Observation.num_mines_remaining,
             ),
             self.session.query(
                 observations_data.c.cell_idx,
-                observations_data.c.num_flags_left.label('lower_bound'),
-                observations_data.c.num_flags_left.label('upper_bound'),
+                func.array_agg(observations_data.c.neighbor_idx),
+                observations_data.c.num_flags_left.label('num_mines_remaining'),
             ).group_by(
                 observations_data.c.cell_idx,
                 observations_data.c.num_flags_left,
@@ -236,76 +221,148 @@ class PostgresDirector(Director):
             ),
         )
         st = st.returning(Observation.id)
-        inserted_observations = st.cte('inserted_observations')
+        insert_observations = st
 
-        # Tag our inserted observation IDs with the same index as our raw
-        # observations data query added to each unique cell_idx
-        st = self.session.query(
-            func.row_number().over().label('observation_idx'),
-            inserted_observations.c.id,
-        )
-        observations = st.cte('observations')
-
-        # Link our observations to the cells they refer to
-        st = insert(ObservationCell)
-        st = st.from_select(
-            (
-                ObservationCell.observation_id,
-                ObservationCell.cell_idx,
-            ),
-            self.session.query(
-                observations.c.id,
-                observations_data.c.neighbor_idx,
-            ).select_from(
-                observations_data,
-            ).join(
-                observations, observations_data.c.observation_idx == observations.c.observation_idx
-            ),
-        )
-        insert_observation_cells = st
-
-        self.session.execute(insert_observation_cells)
+        self.session.execute(insert_observations)
         self.session.commit()
+
+    def propagate_observations(self):
+        """Split observations into atomic chunks
+        """
+        self.split_supersets()
+        self.constrict_overlaps()
+
+    def split_supersets(self):
+        """Remove strict subets from their superset Observation
+        """
+        superset = aliased(Observation, name='superset')
+        subset = aliased(Observation, name='subset')
+
+        st = self.session.query(
+            superset.id,
+            superset.cells,
+            superset.num_mines_remaining,
+            subset.cells,
+            subset.num_mines_remaining,
+        )
+        st = st.select_from(superset, subset)
+        st = st.filter(
+            superset.id != subset.id,
+            superset.cells.contains(subset.cells),
+            superset.cells != subset.cells,
+        )
+        overlaps = st
+
+        did_split = False
+        for super_id, super_cells, super_remaining, sub_cells, sub_remaining in overlaps:
+            super_cells = set(super_cells)
+            sub_cells = set(sub_cells)
+
+            super_cells -= sub_cells
+            super_remaining -= sub_remaining
+
+            st = self.session.query(Observation)
+            st = st.filter_by(id=super_id)
+            st.update({
+                'cells': super_cells,
+                'num_mines_remaining': super_remaining,
+            })
+
+            did_split = True
+
+        return did_split
+
+    def constrict_overlaps(self):
+        """
+        TODO
+        """
+        constrictor = aliased(Observation, name='constrictor')
+        constricted = aliased(Observation, name='constricted')
+
+        st = self.session.query(
+            constrictor.id,
+            constrictor.cells,
+            constrictor.num_mines_remaining,
+            constricted.id,
+            constricted.cells,
+            constricted.num_mines_remaining,
+        )
+        st = st.select_from(constrictor, constricted)
+        st = st.filter(
+            constrictor.id != constricted.id,
+            constrictor.cells.overlap(constricted.cells),
+            constrictor.cells != constricted.cells,
+            constrictor.num_mines_remaining == 1,  # TODO: generalize this
+            constricted.num_mines_remaining > constrictor.num_mines_remaining,
+        )
+        constrictions = st
+
+        did_constrict = False
+        for constrictor_id, constrictor_cells, constrictor_remaining, \
+                constricted_id, constricted_cells, constricted_remaining in constrictions:
+            constrictor_cells = set(constrictor_cells)
+            constricted_cells = set(constricted_cells)
+
+            shared_cells = constrictor_cells & constricted_cells
+            constrictor_only_cells = constrictor_cells - constricted_cells
+            constricted_only_cells = constricted_cells - constrictor_cells
+
+            print('CONSTRICTION')
+            print('shared', shared_cells)
+            print('constricted', constricted_only_cells)
+
+            st = self.session.query(Observation)
+            st = st.filter_by(id=constricted_id)
+            st.update({
+                'num_mines_remaining': constricted_remaining - constrictor_remaining,
+                'cells': constricted_only_cells,
+            })
+
+            did_constrict = True
+
+        return did_constrict
 
     def choose_eager_moves(self):
         # REVELATIONS ---
-        # Any time the upper bound is 0, we know it would be impossible to have
-        # a mine in the cell. So, uh, click it.
+        # Any time num_mines_remaining is 0, we know it would be impossible to
+        # have a mine in the cell. So, uh, click it.
+        st = self.session.query(
+            func.unnest(Observation.cells).label('cell_idx')
+        )
+        st = st.select_from(Observation)
+        st = st.filter(Observation.num_mines_remaining == 0)
+        revelation_cells = st.cte('revelation_cells')
+
         st = self.session.query(
             literal('click'),
             Cell.x,
             Cell.y,
         )
-        st = st.select_from(ObservationCell)
-        st = st.join(Observation)
-        st = st.join(Cell, ObservationCell.cell_idx == Cell.idx)
-        st = st.filter(Observation.upper_bound == 0)
+        st = st.select_from(revelation_cells)
+        st = st.join(Cell, revelation_cells.c.cell_idx == Cell.idx)
+        st = st.filter(Observation.num_mines_remaining == 0)
         to_reveal = st
 
         # FLAGELLATIONS ---
         # First, grab the number of cells in each observation, which must occur
         # in a CTE
         st = self.session.query(
-            ObservationCell.observation_id,
-            func.count(ObservationCell.id).label('size'),
+            func.unnest(Observation.cells).label('cell_idx')
         )
-        st = st.group_by(ObservationCell.observation_id)
-        observation_sizes = st.subquery('observation_sizes')
+        st = st.select_from(Observation)
+        st = st.filter(Observation.num_mines_remaining == func.cardinality(Observation.cells))
+        flagellation_cells = st.subquery('flagellation_cells')
 
-        # Now, any time the bounds of an observation are the same as the number
-        # of cells it references, we are certain all those cells have mines.
-        # So, uh, right click em.
+        # Now, any time num_mines_remaining of an observation are the same as
+        # the number of cells it references, we are certain all those cells have
+        # mines. So, uh, right click em.
         st = self.session.query(
             literal('right_click'),
             Cell.x,
             Cell.y,
         )
-        st = st.select_from(ObservationCell)
-        st = st.join(Observation)
-        st = st.join(observation_sizes)
-        st = st.join(Cell, ObservationCell.cell_idx == Cell.idx)
-        st = st.filter(Observation.lower_bound == Observation.upper_bound,
-                       Observation.lower_bound == observation_sizes.c.size)
+        st = st.select_from(flagellation_cells)
+        st = st.join(Cell, flagellation_cells.c.cell_idx == Cell.idx)
         to_flag = st
 
         all_moves = to_reveal.union(to_flag)
