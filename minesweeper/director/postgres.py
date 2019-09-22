@@ -171,7 +171,7 @@ class PostgresDirector(Director):
 
     def act_deliberately(self):
         # Clear table first
-        self.session.query(Observation).delete()
+        self.engine.execute(f'TRUNCATE {Observation.__tablename__};')
         self.session.commit()
 
         self.init_insights()
