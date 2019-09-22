@@ -16,8 +16,9 @@ from sqlalchemy import (
     Sequence,
     UniqueConstraint,
     update,
+    cast,
 )
-from sqlalchemy.dialects.postgresql import insert, ARRAY
+from sqlalchemy.dialects.postgresql import insert, ARRAY, DOUBLE_PRECISION
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import (
     aliased,
@@ -155,6 +156,7 @@ class PostgresDirector(Director):
 
         methods = [
             self.act_deliberately,
+            self.act_random_with_lowest_observed_probability,
             self.act_random,
         ]
 
@@ -369,6 +371,54 @@ class PostgresDirector(Director):
             (action, self.control.get_cell(x, y))
             for action, x, y in all_moves
         ]
+
+    def act_random_with_lowest_observed_probability(self):
+        """Choose an unrevealed cell with the lowest probability of being a mine
+        """
+        st = self.session.query(
+            (
+                cast(Observation.num_mines_remaining, DOUBLE_PRECISION) / func.cardinality(Observation.cells)
+            ).label('probability'),
+            func.unnest(Observation.cells).label('cell_idx')
+        )
+        st = st.filter(func.cardinality(Observation.cells) > 0)
+        raw_cell_probabilities = st.subquery('raw_cell_probabilities')
+
+        st = self.session.query(
+            func.max(raw_cell_probabilities.c.probability).label('probability'),
+            raw_cell_probabilities.c.cell_idx,
+        )
+        st = st.group_by(raw_cell_probabilities.c.cell_idx)
+        cell_probabilities = st.subquery('cell_probabilities')
+
+        st = self.session.query(
+            Cell.x,
+            Cell.y,
+            cell_probabilities.c.probability,
+        )
+        st = st.select_from(cell_probabilities)
+        st = st.join(Cell, Cell.idx == cell_probabilities.c.cell_idx)
+        st = st.order_by(cell_probabilities.c.probability)
+        choices = st
+
+        choice = choices.first()
+        if not choice:
+            return False
+
+        st = self.session.query(func.count(Cell.idx))
+        st = st.filter_by(is_revealed=False, is_flagged=False)
+        total_unrevealed_count = st.scalar()
+
+        base_probability = self.control.get_mines_left() / total_unrevealed_count
+
+        # Only act if lowest observed probability is less than the probability
+        # of hitting a mine when selecting *any* cell at random
+        if choice.probability >= base_probability:
+            return False
+
+        game_cell = self.control.get_cell(choice.x, choice.y)
+        game_cell.click()
+        return True
 
     def act_random(self):
         qs = self.session.query(Cell)
