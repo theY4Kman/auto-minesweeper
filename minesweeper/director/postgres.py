@@ -15,6 +15,7 @@ from sqlalchemy import (
     or_,
     Sequence,
     UniqueConstraint,
+    update,
 )
 from sqlalchemy.dialects.postgresql import insert, ARRAY
 from sqlalchemy.ext.declarative import declarative_base
@@ -94,6 +95,9 @@ class PostgresDirector(Director):
     def connect(self):
         self.engine = create_engine(self.database_url, echo='debug')
         logging.getLogger('sqlalchemy.engine').propagate = False
+
+        # intarray makes set logic w/ arrays easier
+        self.engine.execute('CREATE EXTENSION IF NOT EXISTS intarray;')
 
         self._sessionmaker = scoped_session(sessionmaker(bind=self.engine))
 
@@ -257,11 +261,11 @@ class PostgresDirector(Director):
         subset = aliased(Observation, name='subset')
 
         st = self.session.query(
-            superset.id,
-            superset.cells,
-            superset.num_mines_remaining,
-            subset.cells,
-            subset.num_mines_remaining,
+            superset.id.label('superset_id'),
+            superset.cells.label('superset_cells'),
+            superset.num_mines_remaining.label('superset_remaining'),
+            subset.cells.label('subset_cells'),
+            subset.num_mines_remaining.label('subset_remaining'),
         )
         st = st.select_from(superset, subset)
         st = st.filter(
@@ -269,27 +273,18 @@ class PostgresDirector(Director):
             superset.cells.contains(subset.cells),
             superset.cells != subset.cells,
         )
-        overlaps = st
+        overlaps = st.subquery('overlaps')
 
-        to_update = []
-        for super_id, super_cells, super_remaining, sub_cells, sub_remaining in overlaps:
-            super_cells = set(super_cells)
-            sub_cells = set(sub_cells)
+        st = update(Observation)
+        st = st.values(
+            cells=overlaps.c.superset_cells - overlaps.c.subset_cells,
+            num_mines_remaining=overlaps.c.superset_remaining - overlaps.c.subset_remaining,
+        )
+        st = st.where(Observation.id == overlaps.c.superset_id)
+        update_supersets = st
 
-            super_cells -= sub_cells
-            super_remaining -= sub_remaining
-
-            to_update.append({
-                'id': super_id,
-                'cells': super_cells,
-                'num_mines_remaining': super_remaining,
-            })
-
-        if not to_update:
-            return False
-
-        self.session.bulk_update_mappings(Observation.__mapper__, to_update)
-        return True
+        self.engine.execute(update_supersets)
+        self.session.commit()
 
     def constrict_overlaps(self):
         """Impose constraints by shrinking observation cells and mines remaining
@@ -298,12 +293,11 @@ class PostgresDirector(Director):
         constricted = aliased(Observation, name='constricted')
 
         st = self.session.query(
-            constrictor.id,
-            constrictor.cells,
-            constrictor.num_mines_remaining,
-            constricted.id,
-            constricted.cells,
-            constricted.num_mines_remaining,
+            constrictor.cells.label('constrictor_cells'),
+            constrictor.num_mines_remaining.label('constrictor_remaining'),
+            constricted.id.label('constricted_id'),
+            constricted.cells.label('constricted_cells'),
+            constricted.num_mines_remaining.label('constricted_remaining'),
         )
         st = st.select_from(constrictor, constricted)
         st = st.filter(
@@ -313,27 +307,18 @@ class PostgresDirector(Director):
             constrictor.num_mines_remaining == 1,  # TODO: generalize this
             constricted.num_mines_remaining > constrictor.num_mines_remaining,
         )
-        constrictions = st
+        constrictions = st.subquery('constrictions')
 
-        to_update = []
-        for constrictor_id, constrictor_cells, constrictor_remaining, \
-                constricted_id, constricted_cells, constricted_remaining in constrictions:
-            constrictor_cells = set(constrictor_cells)
-            constricted_cells = set(constricted_cells)
+        st = update(Observation)
+        st = st.values(
+            cells=constrictions.c.constricted_cells - constrictions.c.constrictor_cells,
+            num_mines_remaining=constrictions.c.constricted_remaining - constrictions.c.constrictor_remaining,
+        )
+        st = st.where(Observation.id == constrictions.c.constricted_id)
+        update_constricted = st
 
-            constricted_only_cells = constricted_cells - constrictor_cells
-
-            to_update.append({
-                'id': constricted_id,
-                'num_mines_remaining': constricted_remaining - constrictor_remaining,
-                'cells': constricted_only_cells,
-            })
-
-        if not to_update:
-            return False
-
-        self.session.bulk_update_mappings(Observation.__mapper__, to_update)
-        return True
+        self.engine.execute(update_constricted)
+        self.session.commit()
 
     def choose_eager_moves(self):
         # REVELATIONS ---
