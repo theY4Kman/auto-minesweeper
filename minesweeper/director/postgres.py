@@ -87,7 +87,9 @@ class PostgresDirector(Director):
         self.last_state: Dict[int, DirectorCell] = {}
 
     def connect(self):
-        self.engine = create_engine(self.database_url, echo='debug')
+        #XXX######################################################################################
+        # self.engine = create_engine(self.database_url, echo='debug')
+        self.engine = create_engine(self.database_url)
         logging.getLogger('sqlalchemy.engine').propagate = False
 
         self._sessionmaker = scoped_session(sessionmaker(bind=self.engine))

@@ -1,4 +1,6 @@
 import logging
+from functools import lru_cache
+
 import os
 from datetime import datetime
 
@@ -37,10 +39,12 @@ TICK = 1000 / FPS
 
 # Board size in cells
 BOARD_SIZE = 30, 16
+BOARD_SIZE = 100, 60
 BOARD_WIDTH, BOARD_HEIGHT = BOARD_SIZE
 
 # Number of mines
 MINES = 99
+MINES = 1200
 
 # Width/height of each cell
 CELL_PX = 16
