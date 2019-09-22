@@ -259,7 +259,7 @@ class PostgresDirector(Director):
         )
         overlaps = st
 
-        did_split = False
+        to_update = []
         for super_id, super_cells, super_remaining, sub_cells, sub_remaining in overlaps:
             super_cells = set(super_cells)
             sub_cells = set(sub_cells)
@@ -267,20 +267,20 @@ class PostgresDirector(Director):
             super_cells -= sub_cells
             super_remaining -= sub_remaining
 
-            st = self.session.query(Observation)
-            st = st.filter_by(id=super_id)
-            st.update({
+            to_update.append({
+                'id': super_id,
                 'cells': super_cells,
                 'num_mines_remaining': super_remaining,
             })
 
-            did_split = True
+        if not to_update:
+            return False
 
-        return did_split
+        self.session.bulk_update_mappings(Observation.__mapper__, to_update)
+        return True
 
     def constrict_overlaps(self):
-        """
-        TODO
+        """Impose constraints by shrinking observation cells and mines remaining
         """
         constrictor = aliased(Observation, name='constrictor')
         constricted = aliased(Observation, name='constricted')
@@ -303,30 +303,25 @@ class PostgresDirector(Director):
         )
         constrictions = st
 
-        did_constrict = False
+        to_update = []
         for constrictor_id, constrictor_cells, constrictor_remaining, \
                 constricted_id, constricted_cells, constricted_remaining in constrictions:
             constrictor_cells = set(constrictor_cells)
             constricted_cells = set(constricted_cells)
 
-            shared_cells = constrictor_cells & constricted_cells
-            constrictor_only_cells = constrictor_cells - constricted_cells
             constricted_only_cells = constricted_cells - constrictor_cells
 
-            print('CONSTRICTION')
-            print('shared', shared_cells)
-            print('constricted', constricted_only_cells)
-
-            st = self.session.query(Observation)
-            st = st.filter_by(id=constricted_id)
-            st.update({
+            to_update.append({
+                'id': constricted_id,
                 'num_mines_remaining': constricted_remaining - constrictor_remaining,
                 'cells': constricted_only_cells,
             })
 
-            did_constrict = True
+        if not to_update:
+            return False
 
-        return did_constrict
+        self.session.bulk_update_mappings(Observation.__mapper__, to_update)
+        return True
 
     def choose_eager_moves(self):
         # REVELATIONS ---
