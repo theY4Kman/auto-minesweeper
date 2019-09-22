@@ -49,7 +49,7 @@ class Cell(Model):
         UniqueConstraint('x', 'y'),
 
         # This allows us to create neighbour links entirely in-memory
-        Index('x', 'y', 'idx'),
+        Index('cell_x_y_lookup', 'x', 'y', 'idx'),
     )
 
     idx = Column(Integer, primary_key=True)
