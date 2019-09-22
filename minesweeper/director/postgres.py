@@ -1,4 +1,6 @@
 import logging
+from typing import Dict
+
 import os
 
 from sqlalchemy import (
@@ -23,7 +25,7 @@ from sqlalchemy.orm import (
 )
 from sqlalchemy.orm.exc import StaleDataError
 
-from minesweeper.director.base import Director, register_director
+from minesweeper.director.base import Director, register_director, Cell as DirectorCell
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +71,8 @@ class Observation(Model):
 
 @register_director('postgres')
 class PostgresDirector(Director):
-    """Use postgres for the heavy lifting"""
+    """Use postgres for the heavy lifting
+    """
 
     def __init__(self, *args, database_url=None, **kwargs):
         super(PostgresDirector, self).__init__()
@@ -81,6 +84,8 @@ class PostgresDirector(Director):
         self.engine = None
         self.connect()
 
+        self.last_state: Dict[int, DirectorCell] = {}
+
     def connect(self):
         self.engine = create_engine(self.database_url, echo='debug')
         logging.getLogger('sqlalchemy.engine').propagate = False
@@ -91,17 +96,18 @@ class PostgresDirector(Director):
         Model.metadata.create_all(self.engine)
 
     def update_cells(self):
-        mappings = [
-            {
-                'idx': i,
-                'x': game_cell.x,
-                'y': game_cell.y,
-                'number': game_cell.number,
-                'is_revealed': game_cell.is_revealed(),
-                'is_flagged': game_cell.is_flagged(),
-            }
-            for i, game_cell in enumerate(self.control.get_cells())
-        ]
+        mappings = []
+        for game_cell in self.control.get_cells():
+            if self.last_state.get(game_cell.idx) != game_cell:
+                self.last_state[game_cell.idx] = game_cell
+                mappings.append({
+                    'idx': game_cell.idx,
+                    'x': game_cell.x,
+                    'y': game_cell.y,
+                    'number': game_cell.number,
+                    'is_revealed': game_cell.is_revealed(),
+                    'is_flagged': game_cell.is_flagged(),
+                })
 
         try:
             self.session.bulk_update_mappings(Cell.__mapper__, mappings)

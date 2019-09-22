@@ -145,6 +145,26 @@ class Cell(object):
     def __repr__(self):
         return '<{self}>'.format(self=self)
 
+    def __eq__(self, other: 'Cell') -> bool:
+        if not other:
+            return False
+
+        return (
+            self._control == other._control and
+            self.x == other.x and
+            self.y == other.y and
+            self.type == other.type
+        )
+
+    def __hash__(self):
+        props = (
+            self._control,
+            self.x,
+            self.y,
+            self.type,
+        )
+        return hash(props)
+
     def get_type_display(self):
         names = {
             self.TYPE_UNREVEALED: 'unrevealed',
