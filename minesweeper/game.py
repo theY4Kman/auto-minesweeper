@@ -870,6 +870,7 @@ class Game(object):
         self.halt = False
         if self.display_axis_indexes:
             self.draw_axis_indexes()
+        pygame.display.update()
         self.mainloop()
 
     def mainloop(self):
