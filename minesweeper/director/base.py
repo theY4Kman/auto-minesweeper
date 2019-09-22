@@ -130,9 +130,7 @@ class Cell(object):
         self.y = y
         self.type = type_
 
-    @property
-    def idx(self):
-        return self.x * self._control.get_board_size()[1] + self.y
+        self.idx = self.x * self._control.get_board_size()[1] + self.y
 
     def __str__(self):
         return 'Cell(x={x}, y={y}, type={type})'.format(
