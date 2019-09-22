@@ -288,14 +288,21 @@ class Cell(object):
             cell.handle_click()
 
     def cascade_empty(self, cell):
-        """Reveal all neighbours of empty cells, recursively"""
-        friendlies = cell.neighbor_friendlies()
-        unrevealed = [c for c in friendlies if not (c.is_revealed or
-                                                    c.is_flagged)]
-        for c in unrevealed:
-            c.is_revealed = True
-            if c.number == 0:
-                self.cascade_empty(c)
+        """Reveal all neighbours of empty cells, iteratively
+        """
+        queue = {cell}
+
+        while queue:
+            cell = queue.pop()
+
+            friendlies = cell.neighbor_friendlies()
+            unrevealed = [c for c in friendlies if not (c.is_revealed or
+                                                        c.is_flagged)]
+
+            for c in unrevealed:
+                c.is_revealed = True
+                if c.number == 0:
+                    queue.add(c)
 
 
 class GameControl(BaseControl):
