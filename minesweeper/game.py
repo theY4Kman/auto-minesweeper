@@ -224,9 +224,11 @@ class Cell(object):
             return self._draw()
 
     def _determine_sprite(self):
-        if self.is_revealed:
-            if self.is_mine:
-                if self.is_losing_mine:
+        # NOTE: direct attribute access (not through properties) is used to
+        #       avoid getattr() costs
+        if self._is_revealed:
+            if self._is_mine:
+                if self._is_losing_mine:
                     return 'mine_losing'
                 else:
                     return 'mine'
@@ -235,12 +237,12 @@ class Cell(object):
             else:
                 return 'empty'
         else:
-            if self.is_flagged:
-                if self.is_mine or not self.is_game_over:
+            if self._is_flagged:
+                if self._is_mine or not self._is_game_over:
                     return 'flag'
                 else:
                     return 'flag_wrong'
-            elif self.is_game_over and self.is_mine:
+            elif self._is_game_over and self._is_mine:
                 return 'mine_unrevealed'
             else:
                 return 'unrevealed'
@@ -311,6 +313,11 @@ class GameControl(BaseControl):
         self._game = game
         self._cells = None
         self._cell_map = None
+        self._director_cells = {
+            (i_x, i_y): DirectorCell(self, i_x, i_y, None)
+            for i_x in range(BOARD_WIDTH)
+            for i_y in range(BOARD_HEIGHT)
+        }
 
     def reset_cache(self):
         """Used by the Game to reset cache, causing cells to be recomputed"""
@@ -330,16 +337,25 @@ class GameControl(BaseControl):
         return self._cell_map.get((x, y))
 
     def _convert_cell(self, raw_cell):
-        sprite = raw_cell._determine_sprite()
-        if sprite.startswith('number'):
-            type_ = raw_cell.number
+        type_ = DirectorCell.TYPE_UNREVEALED
+
+        if raw_cell._is_revealed:
+            if not raw_cell._is_mine:
+                if raw_cell.number:
+                    type_ = raw_cell.number
+                else:
+                    type_ = DirectorCell.TYPE_NUMBER0
         else:
-            type_ = {
-                'empty': DirectorCell.TYPE_NUMBER0,
-                'flag': DirectorCell.TYPE_FLAG,
-                'unrevealed': DirectorCell.TYPE_UNREVEALED,
-            }.get(sprite)
-        return DirectorCell(self, raw_cell.i_x, raw_cell.i_y, type_)
+            if raw_cell._is_flagged:
+                if raw_cell._is_mine or not raw_cell._is_game_over:
+                    type_ = DirectorCell.TYPE_FLAG
+
+        return self._get_director_cell(raw_cell.i_x, raw_cell.i_y, type_)
+
+    def _get_director_cell(self, i_x, i_y, type_) -> DirectorCell:
+        cell = self._director_cells[i_x, i_y]
+        cell.type = type_
+        return cell
 
     def get_cells(self):
         if self._cells is None:
