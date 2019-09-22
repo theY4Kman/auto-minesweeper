@@ -1,7 +1,7 @@
 import logging
 import os
+import threading
 from datetime import datetime
-
 from random import SystemRandom
 from typing import Set
 
@@ -481,6 +481,9 @@ class Game(object):
         self.director_skip_frames = None
         self.director_act_at = None
         self.director_cell_redraw = None
+        self.director_act_evt = threading.Event()
+        self.director_act_lock = threading.Lock()
+        self.director_thread = threading.Thread(target=self._director_act)
 
         self.frame = None
         self.halt = None
@@ -886,7 +889,14 @@ class Game(object):
         if self.display_axis_indexes:
             self.draw_axis_indexes()
         pygame.display.update()
-        self.mainloop()
+
+        self.director_thread.start()
+        try:
+            self.mainloop()
+        finally:
+            self.halt = True
+            self.director_act_evt.set()
+            self.director_thread.join()
 
     def mainloop(self):
         dirty_rects = []
@@ -935,21 +945,24 @@ class Game(object):
             # Director acting!
             if self.in_play and self.director and not self.paused:
                 if self.frame >= self.director_act_at:
-                    director_redraw_cells = self.director_cell_redraw
-                    self.director_cell_redraw = []
+                    if self.director_act_lock.acquire(blocking=False):
+                        director_redraw_cells = self.director_cell_redraw
+                        self.director_cell_redraw = []
 
-                    # Perform queued actions
-                    self.last_director_actions = tuple(self.director_control.get_actions())
-                    self.director_control.exec_queue()
-                    dirty_rects += self.check_winning_state()
+                        # Perform queued actions
+                        self.last_director_actions = tuple(self.director_control.get_actions())
+                        self.director_control.exec_queue()
+                        dirty_rects += self.check_winning_state()
 
-                    if self.in_play:
-                        # Determine next moves
-                        self.director_control.reset_cache()
-                        self.director.act()
-                        self.director_act_at = self.frame + self.director_skip_frames
+                        self.director_act_lock.release()
 
-                    director_acted = True
+                        if self.in_play:
+                            # Determine next moves in separate thread
+                            self.director_control.reset_cache()
+                            self.director_act_evt.set()
+                            self.director_act_at = self.frame + self.director_skip_frames
+
+                        director_acted = True
 
             for cell in self.board.values():
                 if cell.draw():
@@ -995,6 +1008,16 @@ class Game(object):
 
         if self.halt:
             pygame.quit()
+
+    def _director_act(self):
+        while True:
+            self.director_act_evt.wait()
+            if self.halt:
+                return
+
+            with self.director_act_lock:
+                self.director_act_evt.clear()
+                self.director.act()
 
     def reconfigure_board(self, cell):
         """Moves a mine if it's the first cell clicked"""
