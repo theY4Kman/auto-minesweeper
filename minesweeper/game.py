@@ -346,7 +346,7 @@ class GameControl(BaseControl):
             cells = list(map(self._convert_cell, self._game.board.values()))
             cells.sort(key=lambda c: (c.x, c.y))
             self._cells = cells
-            self._cell_map = {(c.x, c.y): c for c  in cells}
+            self._cell_map = {(c.x, c.y): c for c in cells}
         return self._cells
 
     def click(self, x, y):
