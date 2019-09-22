@@ -230,7 +230,8 @@ class Cell(object):
         neighbors = apply_method_filter(neighbors, **filters)
         return set(neighbors)
 
-    def get_neighbor_deltas(self):
+    @staticmethod
+    def get_neighbor_deltas():
         return (
             (-1, -1),
             (0, -1),
@@ -242,7 +243,8 @@ class Cell(object):
             (-1, 0),
         )
 
-    def get_cardinal_neighbor_deltas(self):
+    @staticmethod
+    def get_cardinal_neighbor_deltas():
         return (
             (0, -1),
             (1, 0),

@@ -9,8 +9,10 @@ from sqlalchemy import (
     create_engine,
     ForeignKey,
     func,
+    Index,
     Integer,
     literal,
+    or_,
     Sequence,
     UniqueConstraint,
 )
@@ -44,6 +46,9 @@ class Cell(Model):
     __tablename__ = 'cell'
     __table_args__ = (
         UniqueConstraint('x', 'y'),
+
+        # This allows us to create neighbour links entirely in-memory
+        Index('x', 'y', 'idx'),
     )
 
     idx = Column(Integer, primary_key=True)
@@ -113,15 +118,22 @@ class PostgresDirector(Director):
             self.session.bulk_update_mappings(Cell.__mapper__, mappings)
         except StaleDataError:
             self.session.rollback()
-            self.session.bulk_insert_mappings(Cell.__mapper__, mappings)
 
-            # Also create our neighbor links
-            neighbor_links = [
-                {'cell_idx': game_cell.idx, 'neighbor_idx': neighbor.idx}
-                for game_cell in self.control.get_cells()
-                for neighbor in game_cell.get_neighbors()
-            ]
-            self.session.bulk_insert_mappings(CellNeighbor.__mapper__, neighbor_links)
+            self.session.bulk_insert_mappings(Cell.__mapper__, mappings)
+            self.session.commit()
+
+            # Create our neighbour links using INSERT FROM SELECT
+            neighbor = aliased(Cell, name='neighbor')
+            st = insert(CellNeighbor)
+            st = st.from_select(
+                ['cell_idx', 'neighbor_idx'],
+                self.session
+                    .query(Cell.idx, neighbor.idx)
+                    .select_from(Cell)
+                    .join(neighbor, or_((Cell.x == neighbor.x + d_x) & (Cell.y == neighbor.y + d_y)
+                                        for d_x, d_y in DirectorCell.get_neighbor_deltas()))
+            )
+            self.engine.execute(st)
 
         self.session.commit()
 
