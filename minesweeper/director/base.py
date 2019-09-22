@@ -300,7 +300,7 @@ class Cell(object):
 
 
 class Director(object):
-    def __init__(self, control=None):
+    def __init__(self, control=None, debug=False):
         """
         :type control: BaseControl
         """

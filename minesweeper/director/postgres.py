@@ -81,20 +81,21 @@ class PostgresDirector(Director):
     """Use postgres for the heavy lifting
     """
 
-    def __init__(self, *args, database_url=None, **kwargs):
-        super(PostgresDirector, self).__init__()
+    def __init__(self, *args, database_url=None, debug=True, **kwargs):
+        super(PostgresDirector, self).__init__(*args, debug=debug, **kwargs)
 
         if database_url is None:
             database_url = os.getenv('DATABASE_URL')
 
         self.database_url = database_url
         self.engine = None
+        self.debug = debug
         self.connect()
 
         self.last_state: Dict[int, DirectorCell] = {}
 
     def connect(self):
-        self.engine = create_engine(self.database_url, echo='debug')
+        self.engine = create_engine(self.database_url, echo='debug' if self.debug else False)
         logging.getLogger('sqlalchemy.engine').propagate = False
 
         # intarray makes set logic w/ arrays easier

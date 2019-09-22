@@ -47,6 +47,9 @@ def main(argv=None):
     parser.add_argument("-v", "--verbose", help="increase output verbosity",
                         action="store_true")
 
+    parser.add_argument("--debug", help="enable debugging output",
+                        action="store_true")
+
     args = parser.parse_args(argv)
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG)
@@ -55,7 +58,7 @@ def main(argv=None):
 
     game.director_skip_frames = args.director_skip_frames
     if args.director:
-        director = available_directors.get(args.director)()
+        director = available_directors.get(args.director)(debug=args.debug)
         if director:
             game.set_director(director)
 
