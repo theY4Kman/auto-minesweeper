@@ -98,8 +98,8 @@ class PostgresDirector(Director):
     def update_cells(self):
         mappings = []
         for game_cell in self.control.get_cells():
-            if self.last_state.get(game_cell.idx) != game_cell:
-                self.last_state[game_cell.idx] = game_cell
+            if self.last_state.get(game_cell.idx) != game_cell.type:
+                self.last_state[game_cell.idx] = game_cell.type
                 mappings.append({
                     'idx': game_cell.idx,
                     'x': game_cell.x,
