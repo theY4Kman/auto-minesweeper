@@ -418,6 +418,12 @@ class PostgresDirector(Director):
 
         game_cell = self.control.get_cell(choice.x, choice.y)
         game_cell.click()
+
+        # Mark the other choices, to inform viewer
+        for x, y in choices.with_entities(Cell.x, Cell.y)[1:]:
+            game_cell = self.control.get_cell(x, y)
+            game_cell.mark1()
+
         return True
 
     def act_random(self):
@@ -428,4 +434,10 @@ class PostgresDirector(Director):
         random_cell = qs.first()
         game_cell = self.control.get_cell(random_cell.x, random_cell.y)
         game_cell.click()
+
+        # Mark the other choices, to inform viewer
+        for x, y in qs.with_entities(Cell.x, Cell.y)[1:]:
+            game_cell = self.control.get_cell(x, y)
+            game_cell.mark1()
+
         return True
