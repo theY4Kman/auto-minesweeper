@@ -343,8 +343,7 @@ class GameControl(BaseControl):
 
     def get_cells(self):
         if self._cells is None:
-            cells = list(map(self._convert_cell, self._game.board.values()))
-            cells.sort(key=lambda c: (c.x, c.y))
+            cells = [self._convert_cell(c) for c in self._game.board.values()]
             self._cells = cells
             self._cell_map = {(c.x, c.y): c for c in cells}
         return self._cells
@@ -713,10 +712,10 @@ class Game(object):
         h = c_h * CELL_PX
 
         margin = self.get_board_margin()
-        for i_y, y in enumerate(range(margin + SCOREBOARD_HEIGHT,
-                                      SCOREBOARD_HEIGHT + margin + h,
-                                      CELL_PX)):
-            for i_x, x in enumerate(range(margin, margin + w, CELL_PX)):
+        for i_x, x in enumerate(range(margin, margin + w, CELL_PX)):
+            for i_y, y in enumerate(range(margin + SCOREBOARD_HEIGHT,
+                                          SCOREBOARD_HEIGHT + margin + h,
+                                          CELL_PX)):
                 yield i_x, x, i_y, y
 
     def choose_mines(self):
