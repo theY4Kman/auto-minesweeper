@@ -94,6 +94,12 @@ class PostgresDirector(Director):
 
         self.last_state: Dict[int, DirectorCell] = {}
 
+        # Cache our queries, so we don't incur construction costs in the hot path
+        self._insert_observations_query = None
+        self._split_supersets_query = None
+        self._constrict_overlaps_query = None
+        self._eager_moves_query = None
+
     def connect(self):
         self.engine = create_engine(self.database_url, echo='debug' if self.debug else False)
         logging.getLogger('sqlalchemy.engine').propagate = False
@@ -184,6 +190,16 @@ class PostgresDirector(Director):
             return True
 
     def init_insights(self):
+        self.session.execute(self.get_insert_observations_query())
+        self.session.commit()
+
+    def get_insert_observations_query(self):
+        if self._insert_observations_query is None:
+            self._insert_observations_query = self._get_insert_observations_query()
+
+        return self._insert_observations_query
+
+    def _get_insert_observations_query(self):
         cell = aliased(Cell, name='cell')
         neighbor = aliased(Cell, name='neighbor')
 
@@ -248,8 +264,7 @@ class PostgresDirector(Director):
         st = st.returning(Observation.id)
         insert_observations = st
 
-        self.session.execute(insert_observations)
-        self.session.commit()
+        return insert_observations
 
     def propagate_observations(self):
         """Split observations into atomic chunks
@@ -260,6 +275,16 @@ class PostgresDirector(Director):
     def split_supersets(self):
         """Remove strict subets from their superset Observation
         """
+        self.engine.execute(self.get_split_supersets_query())
+        self.session.commit()
+
+    def get_split_supersets_query(self):
+        if self._split_supersets_query is None:
+            self._split_supersets_query = self._get_split_supersets_query()
+
+        return self._split_supersets_query
+
+    def _get_split_supersets_query(self):
         superset = aliased(Observation, name='superset')
         subset = aliased(Observation, name='subset')
 
@@ -286,12 +311,21 @@ class PostgresDirector(Director):
         st = st.where(Observation.id == overlaps.c.superset_id)
         update_supersets = st
 
-        self.engine.execute(update_supersets)
-        self.session.commit()
+        return update_supersets
 
     def constrict_overlaps(self):
         """Impose constraints by shrinking observation cells and mines remaining
         """
+        self.engine.execute(self.get_constrict_overlaps_query())
+        self.session.commit()
+
+    def get_constrict_overlaps_query(self):
+        if self._constrict_overlaps_query is None:
+            self._constrict_overlaps_query = self._get_constrict_overlaps_query()
+
+        return self._constrict_overlaps_query
+
+    def _get_constrict_overlaps_query(self):
         constrictor = aliased(Observation, name='constrictor')
         constricted = aliased(Observation, name='constricted')
 
@@ -320,10 +354,23 @@ class PostgresDirector(Director):
         st = st.where(Observation.id == constrictions.c.constricted_id)
         update_constricted = st
 
-        self.engine.execute(update_constricted)
-        self.session.commit()
+        return update_constricted
 
     def choose_eager_moves(self):
+        # XXX: using the cached version of the query ends up freezing the app. idk why
+        eager_moves = self.get_eager_moves_query()
+        return [
+            (action, self.control.get_cell(x, y))
+            for action, x, y in eager_moves
+        ]
+
+    def get_eager_moves_query(self):
+        if self._eager_moves_query is None:
+            self._eager_moves_query = self._get_eager_moves_query()
+
+        return self._eager_moves_query.with_session(self.session)
+
+    def _get_eager_moves_query(self):
         # REVELATIONS ---
         # Any time num_mines_remaining is 0, we know it would be impossible to
         # have a mine in the cell. So, uh, click it.
@@ -366,12 +413,8 @@ class PostgresDirector(Director):
         st = st.join(Cell, flagellation_cells.c.cell_idx == Cell.idx)
         to_flag = st
 
-        all_moves = to_reveal.union(to_flag)
-
-        return [
-            (action, self.control.get_cell(x, y))
-            for action, x, y in all_moves
-        ]
+        eager_moves = to_reveal.union(to_flag)
+        return eager_moves
 
     def act_random_with_lowest_observed_probability(self):
         """Choose an unrevealed cell with the lowest probability of being a mine
