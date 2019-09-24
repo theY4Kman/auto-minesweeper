@@ -298,31 +298,47 @@ class Cell(object):
             cell = queue.pop()
 
             friendlies = cell.neighbor_friendlies()
-            unrevealed = [c for c in friendlies if not (c.is_revealed or
-                                                        c.is_flagged)]
+            unrevealed = [
+                c
+                for c in friendlies
+                if not (c.is_revealed or c.is_flagged)
+            ]
 
             for c in unrevealed:
                 c.is_revealed = True
+                self.game.on_cell_revealed(c)
+
                 if c.number == 0:
                     queue.add(c)
 
 
 class GameControl(BaseControl):
-    def __init__(self, game):
+    __slots__ = (
+        '_game',
+        '_cell_map',
+        '_cells',
+        '_dirty_cells',
+    )
+
+    def __init__(self, game: 'Game'):
         super(GameControl, self).__init__()
         self._game = game
-        self._cells = None
-        self._cell_map = None
-        self._director_cells = {
+        self._cell_map = {
             (i_x, i_y): DirectorCell(self, i_x, i_y, None)
             for i_x in range(BOARD_WIDTH)
             for i_y in range(BOARD_HEIGHT)
         }
+        self._cells = self._cell_map.values()
+        self._dirty_cells = []
 
     def reset_cache(self):
         """Used by the Game to reset cache, causing cells to be recomputed"""
-        self._cells = None
-        self._cell_map = None
+        self._dirty_cells = []
+
+        for raw_cell in self._game.dirty_cells:
+            cell = self._cell_map[raw_cell.i_x, raw_cell.i_y]
+            cell.type = self._get_cell_type(raw_cell)
+            self._dirty_cells.append(cell)
 
     def _get_cell_err(self, x, y):
         cell = self._get_raw_cell(x, y)
@@ -336,7 +352,7 @@ class GameControl(BaseControl):
     def get_cell(self, x, y):
         return self._cell_map.get((x, y))
 
-    def _convert_cell(self, raw_cell):
+    def _get_cell_type(self, raw_cell):
         type_ = DirectorCell.TYPE_UNREVEALED
 
         if raw_cell._is_revealed:
@@ -350,19 +366,13 @@ class GameControl(BaseControl):
                 if raw_cell._is_mine or not raw_cell._is_game_over:
                     type_ = DirectorCell.TYPE_FLAG
 
-        return self._get_director_cell(raw_cell.i_x, raw_cell.i_y, type_)
-
-    def _get_director_cell(self, i_x, i_y, type_) -> DirectorCell:
-        cell = self._director_cells[i_x, i_y]
-        cell.type = type_
-        return cell
+        return type_
 
     def get_cells(self):
-        if self._cells is None:
-            cells = [self._convert_cell(c) for c in self._game.board.values()]
-            self._cells = cells
-            self._cell_map = {(c.x, c.y): c for c in cells}
         return self._cells
+
+    def get_dirty_cells(self):
+        return self._dirty_cells
 
     def click(self, x, y):
         cell = self._get_cell_err(x, y)
@@ -409,6 +419,12 @@ class QueuedControl(BaseControl):
 
     def get_cells(self):
         cells = self._control.get_cells()
+        for cell in cells:
+            cell._control = self
+        return cells
+
+    def get_dirty_cells(self):
+        cells = self._control.get_dirty_cells()
         for cell in cells:
             cell._control = self
         return cells
@@ -484,6 +500,10 @@ class Game(object):
         self.director_act_evt = threading.Event()
         self.director_act_lock = threading.Lock()
         self.director_thread = threading.Thread(target=self._director_act)
+        self.last_director_actions = None
+
+        # Cells that have changed state since last director/player actions
+        self.dirty_cells = []
 
         self.frame = None
         self.halt = None
@@ -505,6 +525,8 @@ class Game(object):
         self._last_mines_left = None
         self.has_revealed = None
         self.mousedown_cell = None
+        self.width = None
+        self.height = None
         self.board = None
 
         self.deferred = []
@@ -575,6 +597,7 @@ class Game(object):
         self.board = self._generate_board()
         self.choose_mines()
         self.determine_numbers()
+        self.dirty_cells[:] = self.board.values()
 
     def reset_game_state(self):
         self.lost = self.won = False
@@ -786,12 +809,18 @@ class Game(object):
 
     def on_cell_revealed(self, cell):
         self.has_revealed = True
+        self.mark_cell_dirty(cell)
 
     def on_cell_flagged(self, cell):
         self.mines_left -= 1
+        self.mark_cell_dirty(cell)
 
     def on_cell_unflagged(self, cell):
         self.mines_left += 1
+        self.mark_cell_dirty(cell)
+
+    def mark_cell_dirty(self, cell):
+        self.dirty_cells.append(cell)
 
     def clear_score(self):
         self.screen.fill((0, 0, 0), self.scoreboard_rect)
@@ -1018,6 +1047,7 @@ class Game(object):
             with self.director_act_lock:
                 self.director_act_evt.clear()
                 self.director.act()
+                self.dirty_cells[:] = []
 
     def reconfigure_board(self, cell):
         """Moves a mine if it's the first cell clicked"""
