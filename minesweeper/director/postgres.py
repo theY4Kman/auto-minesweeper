@@ -1,5 +1,5 @@
 import logging
-from typing import Dict
+from typing import Dict, Optional, Any
 
 import os
 
@@ -19,6 +19,8 @@ from sqlalchemy import (
     cast,
 )
 from sqlalchemy.dialects.postgresql import insert, ARRAY, DOUBLE_PRECISION
+from sqlalchemy.ext import baked
+from sqlalchemy.ext.baked import BakedQuery
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import (
     aliased,
@@ -26,6 +28,7 @@ from sqlalchemy.orm import (
     scoped_session,
     Session,
     sessionmaker,
+    Query,
 )
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -93,12 +96,20 @@ class PostgresDirector(Director):
         self.connect()
 
         self.last_state: Dict[int, DirectorCell] = {}
+        self.state: Dict[int, Dict[str, Any]] = {}
+
+        # Use a once-initialized list to store updates, to avoid redundant allocations
+        self._cell_updates = []
 
         # Cache our queries, so we don't incur construction costs in the hot path
-        self._insert_observations_query = None
-        self._split_supersets_query = None
-        self._constrict_overlaps_query = None
-        self._eager_moves_query = None
+        self._insert_observations_query: Optional[Query] = None
+        self._split_supersets_query: Optional[Query] = None
+        self._constrict_overlaps_query: Optional[Query] = None
+        self._baked_eager_moves_query: Optional[BakedQuery] = None
+        self._baked_act_lowest_observed_probability_query: Optional[BakedQuery] = None
+
+        # Use a bakery to avoid SQL generation costs
+        self.bakery = baked.bakery()
 
     def connect(self):
         self.engine = create_engine(self.database_url, echo='debug' if self.debug else False)
@@ -112,19 +123,43 @@ class PostgresDirector(Director):
         Model.metadata.drop_all(self.engine)
         Model.metadata.create_all(self.engine)
 
-    def update_cells(self):
-        mappings = []
-        for game_cell in self.control.get_cells():
-            if self.last_state.get(game_cell.idx) != game_cell.type:
-                self.last_state[game_cell.idx] = game_cell.type
-                mappings.append({
+    def _get_cell_updates(self):
+        if not self.state:
+            self.state = {
+                game_cell.idx: {
                     'idx': game_cell.idx,
                     'x': game_cell.x,
                     'y': game_cell.y,
                     'number': game_cell.number,
                     'is_revealed': game_cell.is_revealed(),
                     'is_flagged': game_cell.is_flagged(),
-                })
+                }
+                for game_cell in self.control.get_dirty_cells()
+            }
+            self.last_state = {
+                game_cell.idx: game_cell.type
+                for game_cell in self.control.get_dirty_cells()
+            }
+            return self.state.values()
+
+        else:
+            self._cell_updates.clear()
+
+            for game_cell in self.control.get_dirty_cells():
+                if self.last_state.get(game_cell.idx) != game_cell.type:
+                    self.last_state[game_cell.idx] = game_cell.type
+
+                    cell_state = self.state[game_cell.idx]
+                    cell_state['number'] = game_cell.number
+                    cell_state['is_revealed'] = game_cell.is_revealed()
+                    cell_state['is_flagged'] = game_cell.is_flagged()
+
+                    self._cell_updates.append(cell_state)
+
+            return self._cell_updates
+
+    def update_cells(self):
+        mappings = self._get_cell_updates()
 
         try:
             self.session.bulk_update_mappings(Cell.__mapper__, mappings)
@@ -163,7 +198,7 @@ class PostgresDirector(Director):
 
         methods = [
             self.act_deliberately,
-            self.act_random_with_lowest_observed_probability,
+            self.act_lowest_observed_probability,
             self.act_random,
         ]
 
@@ -365,23 +400,23 @@ class PostgresDirector(Director):
         ]
 
     def get_eager_moves_query(self):
-        if self._eager_moves_query is None:
-            self._eager_moves_query = self._get_eager_moves_query()
+        if self._baked_eager_moves_query is None:
+            self._baked_eager_moves_query = self.bakery(self._get_eager_moves_query)
 
-        return self._eager_moves_query.with_session(self.session)
+        return self._baked_eager_moves_query.for_session(self.session)
 
-    def _get_eager_moves_query(self):
+    def _get_eager_moves_query(self, session):
         # REVELATIONS ---
         # Any time num_mines_remaining is 0, we know it would be impossible to
         # have a mine in the cell. So, uh, click it.
-        st = self.session.query(
+        st = session.query(
             func.unnest(Observation.cells).label('cell_idx')
         )
         st = st.select_from(Observation)
         st = st.filter(Observation.num_mines_remaining == 0)
         revelation_cells = st.cte('revelation_cells')
 
-        st = self.session.query(
+        st = session.query(
             literal('click'),
             Cell.x,
             Cell.y,
@@ -394,7 +429,7 @@ class PostgresDirector(Director):
         # FLAGELLATIONS ---
         # First, grab the number of cells in each observation, which must occur
         # in a CTE
-        st = self.session.query(
+        st = session.query(
             func.unnest(Observation.cells).label('cell_idx')
         )
         st = st.select_from(Observation)
@@ -404,7 +439,7 @@ class PostgresDirector(Director):
         # Now, any time num_mines_remaining of an observation are the same as
         # the number of cells it references, we are certain all those cells have
         # mines. So, uh, right click em.
-        st = self.session.query(
+        st = session.query(
             literal('right_click'),
             Cell.x,
             Cell.y,
@@ -416,38 +451,14 @@ class PostgresDirector(Director):
         eager_moves = to_reveal.union(to_flag)
         return eager_moves
 
-    def act_random_with_lowest_observed_probability(self):
+    def act_lowest_observed_probability(self):
         """Choose an unrevealed cell with the lowest probability of being a mine
         """
-        st = self.session.query(
-            (
-                cast(Observation.num_mines_remaining, DOUBLE_PRECISION) / func.cardinality(Observation.cells)
-            ).label('probability'),
-            func.unnest(Observation.cells).label('cell_idx')
-        )
-        st = st.filter(func.cardinality(Observation.cells) > 0)
-        raw_cell_probabilities = st.subquery('raw_cell_probabilities')
-
-        st = self.session.query(
-            func.max(raw_cell_probabilities.c.probability).label('probability'),
-            raw_cell_probabilities.c.cell_idx,
-        )
-        st = st.group_by(raw_cell_probabilities.c.cell_idx)
-        cell_probabilities = st.subquery('cell_probabilities')
-
-        st = self.session.query(
-            Cell.x,
-            Cell.y,
-            cell_probabilities.c.probability,
-        )
-        st = st.select_from(cell_probabilities)
-        st = st.join(Cell, Cell.idx == cell_probabilities.c.cell_idx)
-        st = st.order_by(cell_probabilities.c.probability)
-        choices = st
-
-        choice = choices.first()
-        if not choice:
+        choices = self.get_act_lowest_observed_probability_query().all()
+        if not choices:
             return False
+
+        choice, *others = choices
 
         st = self.session.query(func.count(Cell.idx))
         st = st.filter_by(is_revealed=False, is_flagged=False)
@@ -464,11 +475,48 @@ class PostgresDirector(Director):
         game_cell.click()
 
         # Mark the other choices, to inform viewer
-        for x, y in choices.with_entities(Cell.x, Cell.y)[1:]:
-            game_cell = self.control.get_cell(x, y)
+        for cell in others:
+            game_cell = self.control.get_cell(cell.x, cell.y)
             game_cell.mark1()
 
         return True
+
+    def get_act_lowest_observed_probability_query(self):
+        if self._baked_act_lowest_observed_probability_query is None:
+            self._baked_act_lowest_observed_probability_query = (
+                self.bakery(self._get_act_lowest_observed_probability_query)
+            )
+
+        return self._baked_act_lowest_observed_probability_query.for_session(self.session)
+
+    def _get_act_lowest_observed_probability_query(self, session):
+        num_mines_remaining = cast(Observation.num_mines_remaining, DOUBLE_PRECISION)
+
+        st = session.query(
+            (num_mines_remaining / func.cardinality(Observation.cells)).label('probability'),
+            func.unnest(Observation.cells).label('cell_idx')
+        )
+        st = st.filter(func.cardinality(Observation.cells) > 0)
+        raw_cell_probabilities = st.subquery('raw_cell_probabilities')
+
+        st = session.query(
+            func.max(raw_cell_probabilities.c.probability).label('probability'),
+            raw_cell_probabilities.c.cell_idx,
+        )
+        st = st.group_by(raw_cell_probabilities.c.cell_idx)
+        cell_probabilities = st.subquery('cell_probabilities')
+
+        st = session.query(
+            Cell.x,
+            Cell.y,
+            cell_probabilities.c.probability,
+        )
+        st = st.select_from(cell_probabilities)
+        st = st.join(Cell, Cell.idx == cell_probabilities.c.cell_idx)
+        st = st.order_by(cell_probabilities.c.probability)
+        choices = st
+
+        return choices
 
     def act_random(self):
         qs = self.session.query(Cell)

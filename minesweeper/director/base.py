@@ -32,6 +32,7 @@ def register_director(cls, slug=None):
 
 class BaseControl(object):
     """Middleman between directors and the Game"""
+    __slots__ = ('_history',)
 
     def __init__(self):
         self._history = []
@@ -87,6 +88,13 @@ class BaseControl(object):
         """
         raise NotImplementedError
 
+    def get_dirty_cells(self):
+        """Return cells which have changed since last director actions
+
+        :rtype: list of Cell
+        """
+        raise NotImplementedError
+
     def get_board_size(self):
         """Return size of grid"""
         raise NotImplementedError
@@ -122,6 +130,14 @@ class Cell(object):
     TYPE_NUMBER8 = 8
     TYPE_UNREVEALED = 9
     TYPE_FLAG = 10
+
+    __slots__ = (
+        '_control',
+        'x',
+        'y',
+        'type',
+        'idx',
+    )
 
     def __init__(self, control, x, y, type_):
         self._control = control
@@ -180,7 +196,7 @@ class Cell(object):
 
     def is_number(self):
         # Though 0 is still a number, we never care about it like other nums
-        return self.type <= Cell.TYPE_NUMBER8 and not self.is_empty()
+        return Cell.TYPE_NUMBER0 < self.type <= Cell.TYPE_NUMBER8
 
     def is_empty(self):
         return self.type == Cell.TYPE_NUMBER0
@@ -300,6 +316,11 @@ class Cell(object):
 
 
 class Director(object):
+    __slots__ = (
+        'control',
+        'debug',
+    )
+
     def __init__(self, control=None, debug=False):
         """
         :type control: BaseControl
