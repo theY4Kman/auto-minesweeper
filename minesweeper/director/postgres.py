@@ -5,6 +5,7 @@ import os
 
 from sqlalchemy import (
     Boolean,
+    cast,
     Column,
     create_engine,
     ForeignKey,
@@ -16,7 +17,6 @@ from sqlalchemy import (
     Sequence,
     UniqueConstraint,
     update,
-    cast,
 )
 from sqlalchemy.dialects.postgresql import insert, ARRAY, DOUBLE_PRECISION
 from sqlalchemy.ext import baked
@@ -24,11 +24,11 @@ from sqlalchemy.ext.baked import BakedQuery
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import (
     aliased,
+    Query,
     relationship,
     scoped_session,
     Session,
     sessionmaker,
-    Query,
 )
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -70,13 +70,27 @@ class Cell(Model):
                              secondaryjoin=CellNeighbor.neighbor_idx == idx)
 
 
+class ObservationCell(Model):
+    __tablename__ = 'observation_cell'
+
+    observation_id = Column(ForeignKey('observation.id', ondelete='CASCADE'), primary_key=True)
+    cell_idx = Column(ForeignKey('cell.idx', ondelete='CASCADE'), primary_key=True)
+
+    observation = relationship('Observation')
+    cell = relationship('Cell')
+
+
 class Observation(Model):
     __tablename__ = 'observation'
 
     id = Column(Integer, Sequence('observation_id_seq'), primary_key=True)
     cell_idx = Column(Integer, ForeignKey('cell.idx'))
-    cells = Column(ARRAY(Integer))
     num_mines_remaining = Column(Integer)
+
+    cells = relationship('Cell',
+                         secondary=ObservationCell.__table__,
+                         primaryjoin=id == ObservationCell.cell_idx,
+                         secondaryjoin=ObservationCell.cell_idx == Cell.idx)
 
 
 @register_director('postgres')
@@ -198,8 +212,8 @@ class PostgresDirector(Director):
 
         methods = [
             self.act_deliberately,
-            self.act_lowest_observed_probability,
-            self.act_random,
+            # self.act_lowest_observed_probability,
+            # self.act_random,
         ]
 
         try:
@@ -213,16 +227,16 @@ class PostgresDirector(Director):
 
     def act_deliberately(self):
         # Clear table first
-        self.engine.execute(f'TRUNCATE {Observation.__tablename__};')
+        self.engine.execute(f'TRUNCATE {Observation.__tablename__}, {ObservationCell.__tablename__};')
         self.session.commit()
 
         self.init_insights()
-        self.propagate_observations()
-
-        moves = self.choose_eager_moves()
-        if moves:
-            self.exec_moves(moves)
-            return True
+        # self.propagate_observations()
+        #
+        # moves = self.choose_eager_moves()
+        # if moves:
+        #     self.exec_moves(moves)
+        #     return True
 
     def init_insights(self):
         self.session.execute(self.get_insert_observations_query())
@@ -281,12 +295,10 @@ class PostgresDirector(Director):
         st = st.from_select(
             (
                 Observation.cell_idx,
-                Observation.cells,
                 Observation.num_mines_remaining,
             ),
             self.session.query(
                 observations_data.c.cell_idx,
-                func.array_agg(observations_data.c.neighbor_idx),
                 observations_data.c.num_flags_left.label('num_mines_remaining'),
             ).group_by(
                 observations_data.c.cell_idx,
@@ -297,9 +309,35 @@ class PostgresDirector(Director):
             ),
         )
         st = st.returning(Observation.id)
-        insert_observations = st
+        inserted_observations = st.cte('inserted_observations')
 
-        return insert_observations
+        # Tag our inserted observation IDs with the same index as our raw
+        # observations data query added to each unique cell_idx
+        st = self.session.query(
+            func.row_number().over().label('observation_idx'),
+            inserted_observations.c.id,
+        )
+        observations = st.cte('observations')
+
+        # Link our observations to the cells they refer to
+        st = insert(ObservationCell)
+        st = st.from_select(
+            (
+                ObservationCell.observation_id,
+                ObservationCell.cell_idx,
+            ),
+            self.session.query(
+                observations.c.id,
+                observations_data.c.neighbor_idx,
+            ).select_from(
+                observations_data,
+            ).join(
+                observations, observations_data.c.observation_idx == observations.c.observation_idx
+            ),
+        )
+        insert_observation_cells = st
+
+        return insert_observation_cells
 
     def propagate_observations(self):
         """Split observations into atomic chunks
@@ -410,42 +448,34 @@ class PostgresDirector(Director):
         # Any time num_mines_remaining is 0, we know it would be impossible to
         # have a mine in the cell. So, uh, click it.
         st = session.query(
-            func.unnest(Observation.cells).label('cell_idx')
-        )
-        st = st.select_from(Observation)
-        st = st.filter(Observation.num_mines_remaining == 0)
-        revelation_cells = st.cte('revelation_cells')
-
-        st = session.query(
             literal('click'),
             Cell.x,
             Cell.y,
         )
-        st = st.select_from(revelation_cells)
-        st = st.join(Cell, revelation_cells.c.cell_idx == Cell.idx)
+        st = st.select_from(ObservationCell)
         st = st.filter(Observation.num_mines_remaining == 0)
         to_reveal = st
 
         # FLAGELLATIONS ---
         # First, grab the number of cells in each observation, which must occur
         # in a CTE
-        st = session.query(
-            func.unnest(Observation.cells).label('cell_idx')
+        st = self.session.query(
+            ObservationCell.observation_id,
+            func.count(ObservationCell.cell_idx).label('size'),
         )
-        st = st.select_from(Observation)
-        st = st.filter(Observation.num_mines_remaining == func.cardinality(Observation.cells))
-        flagellation_cells = st.subquery('flagellation_cells')
+        st = st.group_by(ObservationCell.observation_id)
+        observation_sizes = st.subquery('observation_sizes')
 
-        # Now, any time num_mines_remaining of an observation are the same as
-        # the number of cells it references, we are certain all those cells have
-        # mines. So, uh, right click em.
-        st = session.query(
+        # Now, any time the bounds of an observation are the same as the number
+        # of cells it references, we are certain all those cells have mines.
+        # So, uh, right click em.
+        st = self.session.query(
             literal('right_click'),
             Cell.x,
             Cell.y,
         )
-        st = st.select_from(flagellation_cells)
-        st = st.join(Cell, flagellation_cells.c.cell_idx == Cell.idx)
+        st = st.select_from(ObservationCell)
+        st = st.filter(Observation.num_mines_remaining == observation_sizes.c.size)
         to_flag = st
 
         eager_moves = to_reveal.union(to_flag)
@@ -492,8 +522,15 @@ class PostgresDirector(Director):
     def _get_act_lowest_observed_probability_query(self, session):
         num_mines_remaining = cast(Observation.num_mines_remaining, DOUBLE_PRECISION)
 
+        st = self.session.query(
+            ObservationCell.observation_id,
+            func.count(ObservationCell.cell_idx).label('size'),
+        )
+        st = st.group_by(ObservationCell.observation_id)
+        observation_sizes = st.subquery('observation_sizes')
+
         st = session.query(
-            (num_mines_remaining / func.cardinality(Observation.cells)).label('probability'),
+            (num_mines_remaining / func.count(ObservationCell.cell_idx)).label('probability'),
             func.unnest(Observation.cells).label('cell_idx')
         )
         st = st.filter(func.cardinality(Observation.cells) > 0)

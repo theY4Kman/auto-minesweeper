@@ -37,10 +37,12 @@ TICK = 1000 / FPS
 
 # Board size in cells
 BOARD_SIZE = 30, 16
+BOARD_SIZE = 100, 60
 BOARD_WIDTH, BOARD_HEIGHT = BOARD_SIZE
 
 # Number of mines
 MINES = 99
+MINES = 1200
 
 # Width/height of each cell
 CELL_PX = 16
@@ -481,7 +483,7 @@ class Game(object):
     }
 
     def __init__(self, tick=None):
-        self.tick = tick or TICK
+        self.tick_rate = tick or TICK
 
         # Whether to clear all neighbours of the first clicked cell (win7), or
         # just clear the cell (winXP)
@@ -516,6 +518,11 @@ class Game(object):
         self.scoreboard_rect: pygame.Rect = None
         self.scoreboard_font: pygame.font.Font = None
         self.axis_index_font: pygame.font.Font = None
+
+        self.dirty_rects = []
+        self.mousedown_cell = None
+        self.mousedown_button = None
+        self.director_redraw_cells = []
 
         self.lost = None
         self.won = None
@@ -642,14 +649,13 @@ class Game(object):
             * (asterisk) - revealed mine (this cell lost the game). The
                 presence of this means the game has been lost.
         """
+        edge_y = BOARD_WIDTH - 1
         chars = []
-        last_y = None
         for i_x, _, i_y, _ in self.grid():
-            if last_y is not None and i_y != last_y:
+            if i_y == edge_y:
                 chars.append('\n')
             cell = self.board[i_x, i_y]
             chars.append(cell.serialize())
-            last_y = i_y
         return ''.join(chars)
 
     def save_fp(self, fp):
@@ -928,115 +934,118 @@ class Game(object):
             self.director_thread.join()
 
     def mainloop(self):
-        dirty_rects = []
-        mousedown_cell = None
-        mousedown_button = None
-        director_redraw_cells = []
+        self.dirty_rects = []
+        self.mousedown_cell = None
+        self.mousedown_button = None
+        self.director_redraw_cells = []
 
+        tick = self.tick
         while not self.halt:
-            director_acted = False
-            self.frame += 1
-
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    self.halt = True
-
-                elif event.type == pygame.MOUSEMOTION:
-                    self.hover_cell = self.get_cell_under_mouse(*event.pos)
-
-                elif event.type == pygame.MOUSEBUTTONDOWN:
-                    mousedown_cell = self.get_cell_under_mouse(*event.pos)
-                    mousedown_button = event.button
-
-                elif event.type == pygame.MOUSEBUTTONUP:
-                    if mousedown_button == event.button:
-                        mouseup_cell = self.get_cell_under_mouse(*event.pos)
-                        if self.in_play and (mouseup_cell and
-                                             mouseup_cell is mousedown_cell):
-                            self.handle_click(event.button, mouseup_cell)
-
-                        elif not self.in_play and mouseup_cell is None:
-                            self.on_margin_clicked()
-
-                    mousedown_cell = None
-                    mousedown_button = None
-
-                elif event.type == pygame.KEYUP:
-                    if event.key == pygame.K_RETURN:
-                        # Treat pressing Enter as pressing the margin
-                        self.on_margin_clicked()
-
-                    if event.key == pygame.K_SPACE:
-                        self.paused = not self.paused
-
-            dirty_rects += self.check_winning_state()
-
-            # Director acting!
-            if self.in_play and self.director and not self.paused:
-                if self.frame >= self.director_act_at:
-                    if self.director_act_lock.acquire(blocking=False):
-                        director_redraw_cells = self.director_cell_redraw
-                        self.director_cell_redraw = []
-
-                        # Perform queued actions
-                        self.last_director_actions = tuple(self.director_control.get_actions())
-                        self.director_control.exec_queue()
-                        dirty_rects += self.check_winning_state()
-
-                        self.director_act_lock.release()
-
-                        if self.in_play:
-                            # Determine next moves in separate thread
-                            self.director_control.reset_cache()
-                            self.director_act_evt.set()
-                            self.director_act_at = self.frame + self.director_skip_frames
-
-                        director_acted = True
-
-            for cell in self.board.values():
-                if cell.draw():
-                    dirty_rects.append(cell)
-
-            # If we're not in play, we draw the director's last actions, to aid
-            # in debugging losses.
-            if director_acted or (not self.in_play and self.last_director_actions):
-                self.redraw_cells(director_redraw_cells)
-
-                if not director_acted:
-                    self.redraw_cells(self.board[x, y]
-                                      for _, x, y in self.last_director_actions)
-
-                # Display next actions
-                dirty_rects += self.draw_director_actions()
-
-            if (self._last_mines_left != self.mines_left or
-                    self._last_in_play != self.in_play):
-                self._last_mines_left = self.mines_left
-                self._last_in_play = self.in_play
-                self.draw_score()
-                dirty_rects.append(self.scoreboard_rect)
-
-            self.draw_hover_cell()
-            dirty_rects.append(self.hover_cell_rect)
-
-            if dirty_rects:
-                pygame.display.update(dirty_rects)
-                dirty_rects = []
-
-            self.clock.tick(self.tick)
-
-            if self.deferred:
-                candidates = self.deferred
-                self.deferred = []
-
-                for run_at_frame, action in candidates:
-                    if self.frame >= run_at_frame:
-                        action()
-                    else:
-                        self.deferred.append((run_at_frame, action))
+            tick()
 
         if self.halt:
             pygame.quit()
+
+    def tick(self):
+        director_acted = False
+        self.frame += 1
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.halt = True
+
+            elif event.type == pygame.MOUSEMOTION:
+                self.hover_cell = self.get_cell_under_mouse(*event.pos)
+
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                self.mousedown_cell = self.get_cell_under_mouse(*event.pos)
+                self.mousedown_button = event.button
+
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if self.mousedown_button == event.button:
+                    mouseup_cell = self.get_cell_under_mouse(*event.pos)
+                    if self.in_play and (mouseup_cell and
+                                         mouseup_cell is self.mousedown_cell):
+                        self.handle_click(event.button, mouseup_cell)
+
+                    elif not self.in_play and mouseup_cell is None:
+                        self.on_margin_clicked()
+
+                self.mousedown_cell = None
+                self.mousedown_button = None
+
+            elif event.type == pygame.KEYUP:
+                if event.key == pygame.K_RETURN:
+                    # Treat pressing Enter as pressing the margin
+                    self.on_margin_clicked()
+
+                if event.key == pygame.K_SPACE:
+                    self.paused = not self.paused
+
+        self.dirty_rects += self.check_winning_state()
+
+        # Director acting!
+        if self.in_play and self.director and not self.paused:
+            if self.frame >= self.director_act_at:
+                if self.director_act_lock.acquire(blocking=False):
+                    self.director_redraw_cells = self.director_cell_redraw
+                    self.director_cell_redraw = []
+
+                    # Perform queued actions
+                    self.last_director_actions = tuple(self.director_control.get_actions())
+                    self.director_control.exec_queue()
+                    self.dirty_rects += self.check_winning_state()
+                    self.director_act_lock.release()
+
+                    if self.in_play:
+                        # Determine next moves in separate thread
+                        self.director_control.reset_cache()
+                        self.director_act_evt.set()
+                        self.director_act_at = self.frame + self.director_skip_frames
+
+                    director_acted = True
+
+        for cell in self.board.values():
+            if cell.draw():
+                self.dirty_rects.append(cell)
+
+        # If we're not in play, we draw the director's last actions, to aid
+        # in debugging losses.
+        if director_acted or (not self.in_play and self.last_director_actions):
+            self.redraw_cells(self.director_redraw_cells)
+
+            if not director_acted:
+                self.redraw_cells(self.board[x, y]
+                                  for _, x, y in self.last_director_actions)
+
+            # Display next actions
+            self.dirty_rects += self.draw_director_actions()
+
+        if (self._last_mines_left != self.mines_left or
+            self._last_in_play != self.in_play):
+            self._last_mines_left = self.mines_left
+            self._last_in_play = self.in_play
+            self.draw_score()
+            self.dirty_rects.append(self.scoreboard_rect)
+
+        self.draw_hover_cell()
+        self.dirty_rects.append(self.hover_cell_rect)
+
+        if self.dirty_rects:
+            pygame.display.update(self.dirty_rects)
+            self.dirty_rects = []
+
+        self.clock.tick(self.tick_rate)
+
+        if self.deferred:
+            candidates = self.deferred
+            self.deferred = []
+
+            for run_at_frame, action in candidates:
+                if self.frame >= run_at_frame:
+                    action()
+                else:
+                    self.deferred.append((run_at_frame, action))
 
     def _director_act(self):
         while True:
