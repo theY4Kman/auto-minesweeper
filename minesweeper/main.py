@@ -1,21 +1,20 @@
-import argparse
 import logging
-
-from minesweeper.director.base import get_directors
-
 logging.basicConfig(level=logging.DEBUG)
 
+from configargparse import ArgumentParser, FileType
+
+from minesweeper.director.base import get_directors
 from minesweeper import Game
 
 
 def main(argv=None):
     available_directors = get_directors()
 
-    parser = argparse.ArgumentParser(
+    parser = ArgumentParser(
         description='Minesweeper with an AI interface')
 
     parser.add_argument('-s', '--scenario',
-                        type=argparse.FileType('r'),
+                        type=FileType('r'),
                         help='Scenario/saved game to load')
     parser.add_argument('--state',
                         help='Game state to load')
@@ -26,12 +25,30 @@ def main(argv=None):
     parser.add_argument('-r', '--repeat',
                         default=False,
                         action='store_true',
-                        help='Repeat loaded scenario')
+                        help='Repeat loaded scenario',
+                        env_var='MINESWEEPER_REPEAT_SCENARIO')
+
+    parser.add_argument('--width',
+                        type=int,
+                        default=60,
+                        help='Number of cells to display in each row',
+                        env_var='MINESWEEPER_BOARD_WIDTH')
+    parser.add_argument('--height',
+                        type=int,
+                        default=30,
+                        help='Number of cells to display in each column',
+                        env_var='MINESWEEPER_BOARD_HEIGHT')
+    parser.add_argument('--mines',
+                        type=int,
+                        default=99,
+                        help='Number of cells which will contain mines',
+                        env_var='MINESWEEPER_NUM_MINES')
 
     parser.add_argument('-d', '--director',
                         choices=['none'] + list(available_directors),
                         default='attempt2',
-                        help='AI director to use (none to disable)')
+                        help='AI director to use (none to disable)',
+                        env_var='MINESWEEPER_DIRECTOR')
     parser.add_argument('--director-skip-frames',
                         type=int,
                         default=1,
@@ -42,25 +59,34 @@ def main(argv=None):
                         default='win7',
                         help='Which minesweeper mode to emulate '
                              '(winxp=clear first clicked cell,'
-                             ' win7=clear neighbours of first clicked cell)')
+                             ' win7=clear neighbours of first clicked cell)',
+                        env_var='MINESWEEPER_MODE')
 
     parser.add_argument("-v", "--verbose", help="increase output verbosity",
                         action="store_true")
 
     parser.add_argument("--debug", help="enable debugging output",
-                        action="store_true")
+                        action="store_true",
+                        env_var='MINESWEEPER_DEBUG')
 
     args = parser.parse_args(argv)
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG)
 
-    game = Game()
+    kwargs = {
+        'width': args.width,
+        'height': args.height,
+        'num_mines': args.mines,
+    }
 
-    game.director_skip_frames = args.director_skip_frames
     if args.director:
-        director = available_directors.get(args.director)(debug=args.debug)
+        director_cls = available_directors.get(args.director)
+        director = director_cls(debug=args.debug)
         if director:
-            game.set_director(director)
+            kwargs['director'] = director
+
+    game = Game(**kwargs)
+    game.director_skip_frames = args.director_skip_frames
 
     if args.scenario and args.state:
         raise RuntimeError("Cannot load both game state (--state) and scenario (-s/--scenario)")

@@ -321,14 +321,17 @@ class Director(object):
         'debug',
     )
 
-    def __init__(self, control=None, debug=False):
-        """
-        :type control: BaseControl
-        """
-        self.control = control
+    def __init__(self, control: BaseControl = None, debug=False):
+        self.control = None
+
+        if control:
+            self.set_control(control)
 
     def set_control(self, control):
         self.control = control
+
+    def reset(self):
+        """Called by the game, when the board resets."""
 
     def act(self):
         """Called by the game. Act on the board here."""

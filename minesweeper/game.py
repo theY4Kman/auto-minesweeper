@@ -35,13 +35,6 @@ for d in SAVE_WIN_DIR, SAVE_LOSS_DIR, SAVE_SCENARIOS_DIR:
 FPS = 120
 TICK = 1000 / FPS
 
-# Board size in cells
-BOARD_SIZE = 30, 16
-BOARD_WIDTH, BOARD_HEIGHT = BOARD_SIZE
-
-# Number of mines
-MINES = 99
-
 # Width/height of each cell
 CELL_PX = 16
 
@@ -325,8 +318,8 @@ class GameControl(BaseControl):
         self._game = game
         self._cell_map = {
             (i_x, i_y): DirectorCell(self, i_x, i_y, None)
-            for i_x in range(BOARD_WIDTH)
-            for i_y in range(BOARD_HEIGHT)
+            for i_x in range(self._game.width)
+            for i_y in range(self._game.height)
         }
         self._cells = self._cell_map.values()
         self._dirty_cells = []
@@ -391,7 +384,7 @@ class GameControl(BaseControl):
         return self._game.handle_click(1000 + mark_num, cell)
 
     def get_board_size(self):
-        return BOARD_SIZE
+        return self._game.width, self._game.height
 
     def get_mines_left(self):
         return self._game.mines_left
@@ -480,7 +473,13 @@ class Game(object):
         1003: sprites.mark3,
     }
 
-    def __init__(self, tick=None):
+    def __init__(self,
+                 width: int = 30,
+                 height: int = 16,
+                 num_mines: int = 99,
+                 tick=None,
+                 director=None
+                 ):
         self.tick = tick or TICK
 
         # Whether to clear all neighbours of the first clicked cell (win7), or
@@ -525,14 +524,17 @@ class Game(object):
         self._last_mines_left = None
         self.has_revealed = None
         self.mousedown_cell = None
-        self.width = None
-        self.height = None
+        self.width = width
+        self.height = height
+        self.num_mines = num_mines
         self.board = None
 
         self.deferred = []
 
         # Initializations
         self.init_vars()
+        if director:
+            self.set_director(director)
         self.init_pygame()
         self.init_game()
 
@@ -569,8 +571,8 @@ class Game(object):
         self.halt = False
         self.paused = False
         self.screen = pygame.display.set_mode((
-            BOARD_WIDTH * CELL_PX + board_margin * 2,
-            BOARD_HEIGHT * CELL_PX + board_margin * 2 + SCOREBOARD_HEIGHT,
+            self.width * CELL_PX + board_margin * 2,
+            self.height * CELL_PX + board_margin * 2 + SCOREBOARD_HEIGHT,
         ))
         self.screen.fill(BG_COLOR)
         self.clock = pygame.time.Clock()
@@ -589,15 +591,15 @@ class Game(object):
         pygame.display.set_caption('Minesweeper')
 
     def init_game(self):
-        self.width = BOARD_WIDTH
-        self.height = BOARD_HEIGHT
-
         self.reset_game_state()
 
         self.board = self._generate_board()
         self.choose_mines()
         self.determine_numbers()
         self.dirty_cells[:] = self.board.values()
+
+        if self.director:
+            self.director.reset()
 
     def reset_game_state(self):
         self.lost = self.won = False
@@ -614,7 +616,7 @@ class Game(object):
         if self.director_control:
             self.director_control.clear_queue()
 
-        self.mines_left = MINES
+        self.mines_left = self.num_mines
         self._last_mines_left = None
 
     def _generate_board(self, c_w=None, c_h=None):
@@ -762,8 +764,7 @@ class Game(object):
 
     def choose_mines(self):
         possibilities = list(self.board.values())
-        random.shuffle(possibilities)
-        mines = possibilities[:MINES]
+        mines = random.sample(possibilities, self.num_mines)
         for cell in mines:
             cell.is_mine = True
 
@@ -771,6 +772,7 @@ class Game(object):
         self.director = director
         self.director_control = QueuedControl(GameControl(self))
         self.director.set_control(self.director_control)
+        self.director.reset()
 
     def determine_numbers(self):
         for cell in self.board.values():
