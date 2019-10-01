@@ -1,4 +1,6 @@
 import logging
+from collections import defaultdict
+from contextlib import contextmanager
 from typing import Dict, Optional, Any
 
 import os
@@ -17,6 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     update,
     cast,
+    text,
 )
 from sqlalchemy.dialects.postgresql import insert, ARRAY, DOUBLE_PRECISION
 from sqlalchemy.ext import baked
@@ -30,9 +33,12 @@ from sqlalchemy.orm import (
     sessionmaker,
     Query,
 )
-from sqlalchemy.orm.exc import StaleDataError
 
-from minesweeper.director.base import Director, register_director, Cell as DirectorCell
+from minesweeper.director.base import (
+    Cell as DirectorCell,
+    Director,
+    register_director,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +48,13 @@ Model = declarative_base()
 
 class CellNeighbor(Model):
     __tablename__ = 'cell_neighbor'
+
+    __table_args__ = (
+        UniqueConstraint('cell_idx', 'neighbor_idx'),
+
+        # This allows us to create neighbour links entirely in-memory
+        Index('cell_neighbor_lookup', 'cell_idx', 'neighbor_idx'),
+    )
 
     cell_idx = Column(ForeignKey('cell.idx'), primary_key=True)
     neighbor_idx = Column(ForeignKey('cell.idx'), primary_key=True)
@@ -72,6 +85,9 @@ class Cell(Model):
 
 class Observation(Model):
     __tablename__ = 'observation'
+    __table_args__ = (
+        Index('observation_size', func.cardinality(text('cells'))),
+    )
 
     id = Column(Integer, Sequence('observation_id_seq'), primary_key=True)
     cell_idx = Column(Integer, ForeignKey('cell.idx'))
@@ -92,6 +108,7 @@ class PostgresDirector(Director):
 
         self.database_url = database_url
         self.engine = None
+        self.session: Session = None
         self.debug = debug
         self.connect()
 
@@ -111,6 +128,19 @@ class PostgresDirector(Director):
         # Use a bakery to avoid SQL generation costs
         self.bakery = baked.bakery()
 
+    @contextmanager
+    def scoped_session(self) -> Session:
+        self.session: Session = self._sessionmaker()
+
+        try:
+            yield self.session
+            self.session.commit()
+        except:
+            self.session.rollback()
+            raise
+        finally:
+            self.session.close()
+
     def connect(self):
         self.engine = create_engine(self.database_url, echo='debug' if self.debug else False)
         logging.getLogger('sqlalchemy.engine').propagate = False
@@ -123,13 +153,63 @@ class PostgresDirector(Director):
         Model.metadata.drop_all(self.engine)
         Model.metadata.create_all(self.engine)
 
+    def reset(self):
+        with self.scoped_session():
+            self.truncate_cells()
+            self.create_cells()
+
+    def truncate_cells(self):
+        self.session.execute('''
+            TRUNCATE TABLE cell CASCADE;
+        ''')
+        self.session.commit()
+
+    def create_cells(self):
+        width, height = self.control.get_board_size()
+
+        self.session.execute(
+            text('''
+                WITH board (width, height) AS (
+                    VALUES (:width, :height)
+                )
+                INSERT INTO cell (idx, x, y, number, is_revealed, is_flagged) 
+                SELECT
+                    x * board.height + y AS idx,
+                    x,
+                    y,
+                    NULL as number,
+                    FALSE AS is_revealed,
+                    FALSE AS is_flagged
+                FROM board,
+                     generate_series(0, board.height - 1) AS y,
+                     generate_series(0, board.width - 1) AS x;
+            '''),
+            params=dict(
+                width=width,
+                height=height,
+            )
+        )
+        self.session.commit()
+
+        # Create our neighbour links using INSERT FROM SELECT
+        neighbor = aliased(Cell, name='neighbor')
+        st = insert(CellNeighbor)
+        st = st.from_select(
+            ['cell_idx', 'neighbor_idx'],
+            self.session
+                .query(Cell.idx, neighbor.idx)
+                .select_from(Cell)
+                .join(neighbor, or_((Cell.x == neighbor.x + d_x) & (Cell.y == neighbor.y + d_y)
+                                    for d_x, d_y in DirectorCell.get_neighbor_deltas()))
+        )
+        self.session.execute(st)
+        self.session.commit()
+
     def _get_cell_updates(self):
         if not self.state:
             self.state = {
                 game_cell.idx: {
                     'idx': game_cell.idx,
-                    'x': game_cell.x,
-                    'y': game_cell.y,
                     'number': game_cell.number,
                     'is_revealed': game_cell.is_revealed(),
                     'is_flagged': game_cell.is_flagged(),
@@ -140,47 +220,39 @@ class PostgresDirector(Director):
                 game_cell.idx: game_cell.type
                 for game_cell in self.control.get_dirty_cells()
             }
-            return self.state.values()
+            return {}
 
         else:
-            self._cell_updates.clear()
+            field_updates = defaultdict(lambda: defaultdict(set))
 
             for game_cell in self.control.get_dirty_cells():
                 if self.last_state.get(game_cell.idx) != game_cell.type:
                     self.last_state[game_cell.idx] = game_cell.type
 
                     cell_state = self.state[game_cell.idx]
-                    cell_state['number'] = game_cell.number
-                    cell_state['is_revealed'] = game_cell.is_revealed()
-                    cell_state['is_flagged'] = game_cell.is_flagged()
 
-                    self._cell_updates.append(cell_state)
+                    if game_cell.number != cell_state['number']:
+                        field_updates['number'][game_cell.number].add(game_cell.idx)
 
-            return self._cell_updates
+                    is_revealed = game_cell.is_revealed()
+                    if is_revealed != cell_state['is_revealed']:
+                        field_updates['is_revealed'][is_revealed].add(game_cell.idx)
+
+                    is_flagged = game_cell.is_flagged()
+                    if is_flagged != cell_state['is_flagged']:
+                        field_updates['is_flagged'][is_flagged].add(game_cell.idx)
+
+            return field_updates
 
     def update_cells(self):
-        mappings = self._get_cell_updates()
+        field_updates = self._get_cell_updates()
 
-        try:
-            self.session.bulk_update_mappings(Cell.__mapper__, mappings)
-        except StaleDataError:
-            self.session.rollback()
-
-            self.session.bulk_insert_mappings(Cell.__mapper__, mappings)
-            self.session.commit()
-
-            # Create our neighbour links using INSERT FROM SELECT
-            neighbor = aliased(Cell, name='neighbor')
-            st = insert(CellNeighbor)
-            st = st.from_select(
-                ['cell_idx', 'neighbor_idx'],
-                self.session
-                    .query(Cell.idx, neighbor.idx)
-                    .select_from(Cell)
-                    .join(neighbor, or_((Cell.x == neighbor.x + d_x) & (Cell.y == neighbor.y + d_y)
-                                        for d_x, d_y in DirectorCell.get_neighbor_deltas()))
-            )
-            self.engine.execute(st)
+        for field, values in field_updates.items():
+            for value, cell_ids in values.items():
+                st = update(Cell)
+                st = st.values(**{field: value})
+                st = st.where(Cell.idx.in_(cell_ids))
+                self.session.execute(st)
 
         self.session.commit()
 
@@ -194,22 +266,18 @@ class PostgresDirector(Director):
         getattr(cell, attr)()
 
     def act(self):
-        self.session: Session = self._sessionmaker()
+        with self.scoped_session():
+            methods = [
+                self.act_deliberately,
+                self.act_lowest_observed_probability,
+                self.act_random,
+            ]
 
-        methods = [
-            self.act_deliberately,
-            self.act_lowest_observed_probability,
-            self.act_random,
-        ]
-
-        try:
             self.update_cells()
             for method in methods:
                 if method():
                     logger.info('Acting with %s', method.__name__)
                     break
-        finally:
-            self._sessionmaker.remove()
 
     def act_deliberately(self):
         # Clear table first
@@ -400,61 +468,39 @@ class PostgresDirector(Director):
         ]
 
     def get_eager_moves_query(self):
-        if self._baked_eager_moves_query is None:
-            self._baked_eager_moves_query = self.bakery(self._get_eager_moves_query)
+        return self.session.execute('''
 
-        return self._baked_eager_moves_query.for_session(self.session)
+            SELECT 
+                'click',
+                cell.x,
+                cell.y
+            FROM (
+                SELECT unnest(observation.cells) AS cell_idx
+                FROM observation
+                WHERE observation.num_mines_remaining = 0
+            ) AS revelation_cells
+            JOIN cell 
+                ON revelation_cells.cell_idx = cell.idx
 
-    def _get_eager_moves_query(self, session):
-        # REVELATIONS ---
-        # Any time num_mines_remaining is 0, we know it would be impossible to
-        # have a mine in the cell. So, uh, click it.
-        st = session.query(
-            func.unnest(Observation.cells).label('cell_idx')
-        )
-        st = st.select_from(Observation)
-        st = st.filter(Observation.num_mines_remaining == 0)
-        revelation_cells = st.cte('revelation_cells')
+            UNION
+            SELECT 
+                'right_click',
+                cell.x,
+                cell.y
+            FROM (
+                SELECT unnest(observation.cells) AS cell_idx
+                FROM observation
+                WHERE observation.num_mines_remaining = cardinality(observation.cells)
+            ) AS flagellation_cells
+            JOIN cell 
+                ON flagellation_cells.cell_idx = cell.idx
 
-        st = session.query(
-            literal('click'),
-            Cell.x,
-            Cell.y,
-        )
-        st = st.select_from(revelation_cells)
-        st = st.join(Cell, revelation_cells.c.cell_idx == Cell.idx)
-        st = st.filter(Observation.num_mines_remaining == 0)
-        to_reveal = st
-
-        # FLAGELLATIONS ---
-        # First, grab the number of cells in each observation, which must occur
-        # in a CTE
-        st = session.query(
-            func.unnest(Observation.cells).label('cell_idx')
-        )
-        st = st.select_from(Observation)
-        st = st.filter(Observation.num_mines_remaining == func.cardinality(Observation.cells))
-        flagellation_cells = st.subquery('flagellation_cells')
-
-        # Now, any time num_mines_remaining of an observation are the same as
-        # the number of cells it references, we are certain all those cells have
-        # mines. So, uh, right click em.
-        st = session.query(
-            literal('right_click'),
-            Cell.x,
-            Cell.y,
-        )
-        st = st.select_from(flagellation_cells)
-        st = st.join(Cell, flagellation_cells.c.cell_idx == Cell.idx)
-        to_flag = st
-
-        eager_moves = to_reveal.union(to_flag)
-        return eager_moves
+        ''')
 
     def act_lowest_observed_probability(self):
         """Choose an unrevealed cell with the lowest probability of being a mine
         """
-        choices = self.get_act_lowest_observed_probability_query().all()
+        choices = self.get_act_lowest_observed_probability_query()
         if not choices:
             return False
 
@@ -477,7 +523,13 @@ class PostgresDirector(Director):
         # Mark the other choices, to inform viewer
         for cell in others:
             game_cell = self.control.get_cell(cell.x, cell.y)
-            game_cell.mark1()
+
+            if cell.probability < 0.34:
+                game_cell.mark1()
+            elif cell.probability < 0.5:
+                game_cell.mark2()
+            else:
+                game_cell.mark3()
 
         return True
 
@@ -518,18 +570,47 @@ class PostgresDirector(Director):
 
         return choices
 
+    def get_act_lowest_observed_probability_query(self):
+        return self.session.execute('''
+            
+            SELECT 
+                cell.x, 
+                cell.y, 
+                cell_probabilities.probability 
+            FROM (
+                SELECT 
+                    max(raw_cell_probabilities.probability) AS probability, 
+                    raw_cell_probabilities.cell_idx AS cell_idx 
+                FROM (
+                    SELECT 
+                        CAST(observation.num_mines_remaining AS DOUBLE PRECISION) / cardinality(observation.cells) AS probability,
+                        unnest(observation.cells) AS cell_idx
+                    FROM observation
+                    WHERE cardinality(observation.cells) > 0
+                ) AS raw_cell_probabilities 
+                GROUP BY raw_cell_probabilities.cell_idx
+            ) AS cell_probabilities 
+            JOIN cell 
+                ON cell.idx = cell_probabilities.cell_idx 
+            ORDER BY cell_probabilities.probability
+        
+        ''').fetchall()
+
     def act_random(self):
         qs = self.session.query(Cell)
         qs = qs.filter_by(is_revealed=False, is_flagged=False)
         qs = qs.order_by(func.random())
 
         random_cell = qs.first()
+        if not random_cell:
+            return False
+
         game_cell = self.control.get_cell(random_cell.x, random_cell.y)
         game_cell.click()
 
         # Mark the other choices, to inform viewer
         for x, y in qs.with_entities(Cell.x, Cell.y)[1:]:
             game_cell = self.control.get_cell(x, y)
-            game_cell.mark1()
+            game_cell.mark3()
 
         return True
