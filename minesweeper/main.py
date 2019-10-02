@@ -79,7 +79,7 @@ def main(argv=None):
         'num_mines': args.mines,
     }
 
-    if args.director:
+    if args.director and args.director != 'none':
         director_cls = available_directors.get(args.director)
         director = director_cls(debug=args.debug)
         if director:
